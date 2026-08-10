@@ -1,0 +1,12 @@
+services:
+  agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      # Add each allowlisted repository using the same container path used in
+      # REPOSITORIES_JSON, for example:
+      # - /home/me/projects/my-app:/workspaces/my-app
+      # Mount Codex login state read-only if you use ChatGPT authentication:
+      # - /home/me/.codex:/home/node/.codex:ro
