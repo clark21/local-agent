@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import {
   ApprovalDecision,
   ApprovalRequest,
+  CodexService,
 } from '../codex/codex.service';
 import { AgentConfigService } from '../config/agent-config.service';
 import { DatabaseService } from '../database/database.service';
@@ -12,6 +13,7 @@ import { TaskService } from '../tasks/task.service';
 const HELP = `Local Codex agent commands:
 /repo - list repositories
 /repo <name> - select a repository and start a fresh thread
+/threads - list and resume recent threads for the current repository
 /new - start a fresh thread in the current repository
 /status - show current repository and task status
 /cancel - cancel the active task
@@ -28,16 +30,29 @@ interface PendingApproval {
   timer: NodeJS.Timeout;
 }
 
+interface PendingThreadSelection {
+  chatId: number;
+  userId: number;
+  repositoryKey: string;
+  threadId: string;
+  timer: NodeJS.Timeout;
+}
+
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramService.name);
   private readonly bot: Telegraf;
   private readonly pendingApprovals = new Map<string, PendingApproval>();
+  private readonly pendingThreadSelections = new Map<
+    string,
+    PendingThreadSelection
+  >();
 
   constructor(
     private readonly config: AgentConfigService,
     private readonly tasks: TaskService,
     private readonly database: DatabaseService,
+    private readonly codex: CodexService,
   ) {
     this.bot = new Telegraf(config.telegramToken);
     this.registerHandlers();
@@ -46,6 +61,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     await this.bot.telegram.setMyCommands([
       { command: 'repo', description: 'List or select a repository' },
+      { command: 'threads', description: 'List and resume recent threads' },
       { command: 'new', description: 'Start a fresh Codex thread' },
       { command: 'status', description: 'Show task status' },
       { command: 'cancel', description: 'Cancel the active task' },
@@ -59,6 +75,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     for (const [token] of this.pendingApprovals) {
       this.resolveApproval(token, 'decline', 'Application shutting down.');
     }
+    for (const selection of this.pendingThreadSelections.values()) {
+      clearTimeout(selection.timer);
+    }
+    this.pendingThreadSelections.clear();
     this.bot.stop('application shutdown');
   }
 
@@ -102,6 +122,66 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           ? 'A fresh Codex thread will be used for the next message.'
           : 'Cannot reset the thread while a task is running.',
       );
+    });
+
+    this.bot.command('threads', async (ctx) => {
+      const status = this.tasks.status(ctx.chat.id);
+      if (status.running) {
+        await ctx.reply('Wait for the active task to finish or use /cancel first.');
+        return;
+      }
+      const repository = this.config.repository(status.repositoryKey);
+      if (!repository) {
+        await ctx.reply('The selected repository is no longer configured.');
+        return;
+      }
+      await ctx.reply(`Loading recent threads for ${repository.key}…`);
+      try {
+        const threads = await this.codex.listThreads(repository, 10);
+        if (threads.length === 0) {
+          await ctx.reply(`No saved Codex threads found for ${repository.key}.`);
+          return;
+        }
+        this.clearThreadSelectionsForChat(ctx.chat.id);
+        const rows = threads.map((thread) => {
+          const token = randomBytes(6).toString('hex');
+          const timer = setTimeout(
+            () => this.expireThreadSelection(token),
+            this.config.approvalTimeoutMs,
+          );
+          this.pendingThreadSelections.set(token, {
+            chatId: ctx.chat.id,
+            userId: ctx.from.id,
+            repositoryKey: repository.key,
+            threadId: thread.id,
+            timer,
+          });
+          const date = thread.updatedAt
+            ? new Date(thread.updatedAt * 1_000).toLocaleString('en-PH', {
+                timeZone: 'Asia/Manila',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : 'Unknown date';
+          const title = thread.name || thread.preview || 'Untitled thread';
+          return [
+            {
+              text: this.limit(`${date} · ${title.replace(/\s+/g, ' ')}`, 60),
+              callback_data: `thread:${token}`,
+            },
+          ];
+        });
+        await ctx.reply(
+          `Recent threads for ${repository.key}:\nSelect one to resume. Buttons expire in ${Math.ceil(this.config.approvalTimeoutMs / 60_000)} minutes.`,
+          { reply_markup: { inline_keyboard: rows } },
+        );
+      } catch (error) {
+        await ctx.reply(
+          `Could not list threads: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
     });
 
     this.bot.command('status', async (ctx) => {
@@ -155,6 +235,42 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             `Approval ${token} was delivered, but Telegram callback acknowledgement failed: ${error instanceof Error ? error.message : 'unknown error'}`,
           );
         });
+    });
+
+    this.bot.action(/^thread:([a-f0-9]+)$/, async (ctx) => {
+      const token = ctx.match[1];
+      const selection = this.pendingThreadSelections.get(token);
+      if (!selection) {
+        await ctx.answerCbQuery('This thread selection has expired.').catch(() => undefined);
+        return;
+      }
+      if (ctx.chat?.id !== selection.chatId || ctx.from.id !== selection.userId) {
+        await ctx
+          .answerCbQuery('Only the user who opened this list can select a thread.', {
+            show_alert: true,
+          })
+          .catch(() => undefined);
+        return;
+      }
+      this.expireThreadSelection(token);
+      const resumed = this.tasks.resumeThread(
+        selection.chatId,
+        selection.repositoryKey,
+        selection.threadId,
+      );
+      if (!resumed) {
+        await ctx.answerCbQuery('Repository changed or a task is running.', {
+          show_alert: true,
+        }).catch(() => undefined);
+        return;
+      }
+      await ctx.answerCbQuery('Thread resumed.').catch(() => undefined);
+      await ctx
+        .editMessageText(
+          `Resumed thread ${selection.threadId.slice(0, 8)}… in ${selection.repositoryKey}.\nSend a normal message to continue.`,
+        )
+        .catch(() => undefined);
+      this.clearThreadSelectionsForChat(selection.chatId);
     });
 
     this.bot.on('text', (ctx) => {
@@ -293,6 +409,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private clearApprovalsForChat(chatId: number, label: string): void {
     for (const [token, pending] of this.pendingApprovals) {
       if (pending.chatId === chatId) this.resolveApproval(token, 'decline', label);
+    }
+  }
+
+  private expireThreadSelection(token: string): void {
+    const selection = this.pendingThreadSelections.get(token);
+    if (!selection) return;
+    clearTimeout(selection.timer);
+    this.pendingThreadSelections.delete(token);
+  }
+
+  private clearThreadSelectionsForChat(chatId: number): void {
+    for (const [token, selection] of this.pendingThreadSelections) {
+      if (selection.chatId === chatId) this.expireThreadSelection(token);
     }
   }
 

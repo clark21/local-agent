@@ -25,6 +25,13 @@ export interface CodexRunResult {
   threadId: string;
 }
 
+export interface CodexThreadSummary {
+  id: string;
+  preview: string;
+  name?: string;
+  updatedAt: number;
+}
+
 export type ProgressHandler = (message: string) => Promise<void>;
 export type ApprovalHandler = (
   request: ApprovalRequest,
@@ -79,6 +86,26 @@ export class CodexService {
       const threadId = await client.openThread(existingThreadId);
       const response = await client.runTurn(threadId, prompt, signal);
       return { response, threadId };
+    } finally {
+      client.close();
+    }
+  }
+
+  async listThreads(
+    repository: RepositoryConfig,
+    limit = 10,
+  ): Promise<CodexThreadSummary[]> {
+    const client = new AppServerClient(
+      this.config.codexPath,
+      repository,
+      this.config.codexModel,
+      () => Promise.resolve(),
+      () => Promise.resolve('decline'),
+      this.logger,
+    );
+    try {
+      await client.initialize();
+      return await client.listThreads(limit);
     } finally {
       client.close();
     }
@@ -160,6 +187,38 @@ class AppServerClient {
         });
     this.activeThreadId = response.thread.id;
     return response.thread.id;
+  }
+
+  async listThreads(limit: number): Promise<CodexThreadSummary[]> {
+    const response = await this.request<{
+      data?: Array<Record<string, unknown>>;
+    }>('thread/list', {
+      limit,
+      sortKey: 'updated_at',
+      sortDirection: 'desc',
+      cwd: this.repository.path,
+      archived: false,
+    });
+    if (!Array.isArray(response.data)) return [];
+    return response.data.flatMap((thread) => {
+      if (typeof thread.id !== 'string') return [];
+      return [
+        {
+          id: thread.id,
+          preview: this.stringValue(thread.preview, 'Untitled thread'),
+          name:
+            typeof thread.name === 'string' && thread.name
+              ? thread.name
+              : undefined,
+          updatedAt:
+            typeof thread.updatedAt === 'number'
+              ? thread.updatedAt
+              : typeof thread.createdAt === 'number'
+                ? thread.createdAt
+                : 0,
+        },
+      ];
+    });
   }
 
   async runTurn(

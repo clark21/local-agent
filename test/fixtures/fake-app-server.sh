@@ -7,6 +7,9 @@ while IFS= read -r line; do
     *'"method":"thread/start"'*)
       printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-test"}}}'
       ;;
+    *'"method":"thread/list"'*)
+      printf '%s\n' '{"id":2,"result":{"data":[{"id":"thread-old","preview":"Fix the tests","name":null,"updatedAt":1786291200}],"nextCursor":null,"backwardsCursor":null}}'
+      ;;
     *'"method":"turn/start"'*)
       printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-test"}}}'
       printf '%s\n' '{"id":900,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-test","turnId":"turn-test","itemId":"item-test","command":"npm test","cwd":"/tmp"}}'

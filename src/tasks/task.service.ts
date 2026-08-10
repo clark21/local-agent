@@ -50,6 +50,14 @@ export class TaskService {
     return true;
   }
 
+  resumeThread(chatId: number, repositoryKey: string, threadId: string): boolean {
+    if (this.active.has(chatId)) return false;
+    const session = this.session(chatId);
+    if (session.repositoryKey !== repositoryKey) return false;
+    this.database.saveThread(chatId, threadId);
+    return true;
+  }
+
   status(chatId: number): TaskStatus {
     const session = this.session(chatId);
     const active = this.active.get(chatId);

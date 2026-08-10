@@ -24,4 +24,22 @@ describe('CodexService app-server integration', () => {
     expect(commands).toEqual(['npm test']);
     expect(result).toEqual({ response: 'completed', threadId: 'thread-test' });
   });
+
+  it('lists threads for a repository', async () => {
+    const service = new CodexService({
+      codexPath: resolve('test/fixtures/fake-app-server.sh'),
+      codexModel: undefined,
+    } as never);
+
+    await expect(
+      service.listThreads({ key: 'test', path: '/tmp' }),
+    ).resolves.toEqual([
+      {
+        id: 'thread-old',
+        preview: 'Fix the tests',
+        name: undefined,
+        updatedAt: 1786291200,
+      },
+    ]);
+  });
 });

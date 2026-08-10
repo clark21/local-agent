@@ -295,6 +295,7 @@ same bot token; Telegram updates may be consumed by either process.
 | --- | --- |
 | `/repo` | Lists allowlisted repositories and shows the selected one. |
 | `/repo <name>` | Selects a repository and starts a fresh Codex thread. |
+| `/threads` | Lists recent threads for the selected repository with resume buttons. |
 | `/new` | Clears the saved thread for a fresh conversation. |
 | `/status` | Shows the current repository and active task state. |
 | `/cancel` | Requests cancellation of the active Codex turn. |
@@ -303,7 +304,10 @@ same bot token; Telegram updates may be consumed by either process.
 
 Thread IDs are stored in SQLite. Follow-up messages continue the same Codex
 conversation, including after a service restart, until `/new` is used or the
-repository is changed.
+repository is changed. `/threads` queries Codex's local history, filters it to
+the selected repository, and displays up to ten recent threads. Only the user
+who requested that list may select one, and its buttons expire after the
+configured approval timeout.
 
 ## Running continuously with systemd
 

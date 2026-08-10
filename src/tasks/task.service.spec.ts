@@ -75,4 +75,16 @@ describe('TaskService', () => {
     finish({ response: 'done', threadId: 'thread-1' });
     await first;
   });
+
+  it('resumes a thread only for the currently selected repository', () => {
+    const service = new TaskService(
+      config as never,
+      database as never,
+      { run: jest.fn() } as never,
+    );
+
+    expect(service.resumeThread(1, 'other', 'thread-x')).toBe(false);
+    expect(service.resumeThread(1, 'app', 'thread-x')).toBe(true);
+    expect(database.saveThread).toHaveBeenCalledWith(1, 'thread-x');
+  });
 });
