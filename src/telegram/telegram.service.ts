@@ -125,13 +125,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const [, token, action] = ctx.match;
       const pending = this.pendingApprovals.get(token);
       if (!pending) {
-        await ctx.answerCbQuery('This approval has expired.');
+        await ctx
+          .answerCbQuery('This approval has expired.')
+          .catch(() => undefined);
         return;
       }
       if (ctx.chat?.id !== pending.chatId || ctx.from.id !== pending.userId) {
-        await ctx.answerCbQuery('Only the user who started this task can decide.', {
-          show_alert: true,
-        });
+        await ctx
+          .answerCbQuery('Only the user who started this task can decide.', {
+            show_alert: true,
+          })
+          .catch(() => undefined);
         return;
       }
       const decisions: Record<string, ApprovalDecision> = {
@@ -141,13 +145,28 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         cancel: 'cancel',
       };
       const decision = decisions[action];
-      await ctx.answerCbQuery(this.decisionLabel(decision));
+      // Resume Codex before acknowledging Telegram. Telegram may reject an old
+      // callback-query acknowledgement; that must not strand the Codex turn.
       this.resolveApproval(token, decision, this.decisionLabel(decision));
+      await ctx
+        .answerCbQuery(this.decisionLabel(decision))
+        .catch((error: unknown) => {
+          this.logger.debug(
+            `Approval ${token} was delivered, but Telegram callback acknowledgement failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
+        });
     });
 
-    this.bot.on('text', async (ctx) => {
+    this.bot.on('text', (ctx) => {
       if (ctx.message.text.startsWith('/')) return;
-      await this.handleTask(ctx, ctx.message.text);
+      // Do not await a long-running Codex turn inside Telegraf's update
+      // middleware. The polling loop must remain free to process approval-button
+      // callback queries while this task is paused waiting for a decision.
+      void this.handleTask(ctx, ctx.message.text).catch((error: unknown) => {
+        this.logger.error(
+          `Detached Telegram task failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      });
     });
 
     this.bot.catch((error, ctx) => {
