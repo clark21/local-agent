@@ -19,6 +19,8 @@ describe('AgentConfigService', () => {
     expect(service.repository('app')).toEqual({ key: 'app', path: '/tmp/app' });
     expect(service.defaultRepository).toBe('app');
     expect(service.codexNetworkAccess).toBe(false);
+    expect(service.codexSandboxMode).toBe('read-only');
+    expect(service.codexApprovalPolicy).toBe('untrusted');
   });
 
   it('enables Codex network access only when explicitly set to true', () => {
@@ -34,18 +36,47 @@ describe('AgentConfigService', () => {
     expect(service.codexNetworkAccess).toBe(true);
   });
 
-  it('rejects an invalid Codex network access value', () => {
-    expect(
-      () =>
-        new AgentConfigService(
-          config({
-            TELEGRAM_BOT_TOKEN: 'token',
-            TELEGRAM_ALLOWED_USER_IDS: '123',
-            REPOSITORIES_JSON: '{"app":"/tmp/app"}',
-            CODEX_NETWORK_ACCESS: 'yes',
-          }),
-        ),
-    ).toThrow('CODEX_NETWORK_ACCESS must be true or false');
+  it('disables Codex network access for an invalid value', () => {
+    const service = new AgentConfigService(
+      config({
+        TELEGRAM_BOT_TOKEN: 'token',
+        TELEGRAM_ALLOWED_USER_IDS: '123',
+        REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+        CODEX_NETWORK_ACCESS: 'yes',
+      }),
+    );
+
+    expect(service.codexNetworkAccess).toBe(false);
+  });
+
+  it('configures the Codex sandbox and approval policy', () => {
+    const service = new AgentConfigService(
+      config({
+        TELEGRAM_BOT_TOKEN: 'token',
+        TELEGRAM_ALLOWED_USER_IDS: '123',
+        REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+        CODEX_SANDBOX_MODE: 'read-only',
+        CODEX_APPROVAL_POLICY: 'on-request',
+      }),
+    );
+
+    expect(service.codexSandboxMode).toBe('read-only');
+    expect(service.codexApprovalPolicy).toBe('on-request');
+  });
+
+  it('uses conservative fallbacks for invalid Codex permission settings', () => {
+    const service = new AgentConfigService(
+      config({
+        TELEGRAM_BOT_TOKEN: 'token',
+        TELEGRAM_ALLOWED_USER_IDS: '123',
+        REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+        CODEX_SANDBOX_MODE: 'everything',
+        CODEX_APPROVAL_POLICY: 'always',
+      }),
+    );
+
+    expect(service.codexSandboxMode).toBe('read-only');
+    expect(service.codexApprovalPolicy).toBe('untrusted');
   });
 
   it('rejects relative repository paths', () => {

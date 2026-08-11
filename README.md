@@ -199,6 +199,8 @@ DATABASE_PATH=./data/agent.db
 CODEX_MODEL=
 CODEX_PATH=codex
 CODEX_NETWORK_ACCESS=false
+CODEX_SANDBOX_MODE=workspace-write
+CODEX_APPROVAL_POLICY=untrusted
 TASK_TIMEOUT_MS=1800000
 APPROVAL_TIMEOUT_MS=300000
 MAX_MESSAGE_LENGTH=12000
@@ -215,7 +217,9 @@ MAX_MESSAGE_LENGTH=12000
 | `DATABASE_PATH` | No | SQLite file; defaults to `./data/agent.db`. |
 | `CODEX_MODEL` | No | Explicit Codex model. Empty uses the local Codex default. |
 | `CODEX_PATH` | No | Codex CLI executable; defaults to `codex`. |
-| `CODEX_NETWORK_ACCESS` | No | Set to `true` to allow outbound network access for Codex turns; defaults to `false`. |
+| `CODEX_NETWORK_ACCESS` | No | Set to `true` to allow outbound network access for Codex turns; missing or invalid values fall back to `false`. |
+| `CODEX_SANDBOX_MODE` | No | Codex filesystem sandbox: `read-only`, `workspace-write`, or `danger-full-access`; missing or invalid values fall back to `read-only`. |
+| `CODEX_APPROVAL_POLICY` | No | Codex approval policy: `untrusted`, `on-request`, or `never`; missing or invalid values fall back to `untrusted`. |
 | `TASK_TIMEOUT_MS` | No | Maximum turn duration; defaults to 30 minutes. |
 | `APPROVAL_TIMEOUT_MS` | No | Approval lifetime; defaults to 5 minutes, then rejects. |
 | `MAX_MESSAGE_LENGTH` | No | Maximum accepted prompt length; defaults to 12,000 characters. |

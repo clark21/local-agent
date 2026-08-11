@@ -7,6 +7,12 @@ export interface RepositoryConfig {
   path: string;
 }
 
+export type CodexSandboxMode =
+  | 'read-only'
+  | 'workspace-write'
+  | 'danger-full-access';
+export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never';
+
 @Injectable()
 export class AgentConfigService {
   readonly telegramToken: string;
@@ -17,6 +23,8 @@ export class AgentConfigService {
   readonly codexModel?: string;
   readonly codexPath: string;
   readonly codexNetworkAccess: boolean;
+  readonly codexSandboxMode: CodexSandboxMode;
+  readonly codexApprovalPolicy: CodexApprovalPolicy;
   readonly taskTimeoutMs: number;
   readonly approvalTimeoutMs: number;
   readonly maxMessageLength: number;
@@ -46,7 +54,16 @@ export class AgentConfigService {
     this.codexPath = config.get<string>('CODEX_PATH')?.trim() || 'codex';
     this.codexNetworkAccess = this.boolean(
       config.get<string>('CODEX_NETWORK_ACCESS'),
-      'CODEX_NETWORK_ACCESS',
+    );
+    this.codexSandboxMode = this.oneOf(
+      config.get<string>('CODEX_SANDBOX_MODE'),
+      ['read-only', 'workspace-write', 'danger-full-access'] as const,
+      'read-only',
+    );
+    this.codexApprovalPolicy = this.oneOf(
+      config.get<string>('CODEX_APPROVAL_POLICY'),
+      ['untrusted', 'on-request', 'never'] as const,
+      'untrusted',
     );
     this.taskTimeoutMs = this.positiveInteger(
       config.get<string>('TASK_TIMEOUT_MS') ?? '1800000',
@@ -117,11 +134,19 @@ export class AgentConfigService {
     return parsed;
   }
 
-  private boolean(value: string | undefined, key: string): boolean {
+  private boolean(value: string | undefined): boolean {
     const normalized = value?.trim().toLowerCase();
-    if (!normalized) return false;
     if (normalized === 'true') return true;
-    if (normalized === 'false') return false;
-    throw new Error(`${key} must be true or false`);
+    return false;
+  }
+
+  private oneOf<const T extends readonly string[]>(
+    value: string | undefined,
+    allowed: T,
+    fallback: T[number],
+  ): T[number] {
+    const normalized = value?.trim();
+    const match = allowed.find((candidate) => candidate === normalized);
+    return match ?? fallback;
   }
 }

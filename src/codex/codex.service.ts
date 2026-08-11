@@ -1,7 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { AgentConfigService, RepositoryConfig } from '../config/agent-config.service';
+import {
+  AgentConfigService,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+  RepositoryConfig,
+} from '../config/agent-config.service';
 
 export type ApprovalDecision =
   | 'accept'
@@ -58,6 +63,9 @@ interface TurnResponse {
   turn: { id: string };
 }
 
+type AppServerApprovalPolicy = 'unlessTrusted' | 'onRequest' | 'never';
+type AppServerSandboxMode = 'readOnly' | 'workspaceWrite' | 'dangerFullAccess';
+
 @Injectable()
 export class CodexService {
   private readonly logger = new Logger(CodexService.name);
@@ -77,6 +85,8 @@ export class CodexService {
       repository,
       this.config.codexModel,
       this.config.codexNetworkAccess,
+      this.config.codexSandboxMode,
+      this.config.codexApprovalPolicy,
       onProgress,
       onApproval,
       this.logger,
@@ -101,6 +111,8 @@ export class CodexService {
       repository,
       this.config.codexModel,
       this.config.codexNetworkAccess,
+      this.config.codexSandboxMode,
+      this.config.codexApprovalPolicy,
       () => Promise.resolve(),
       () => Promise.resolve('decline'),
       this.logger,
@@ -130,6 +142,8 @@ class AppServerClient {
     private readonly repository: RepositoryConfig,
     private readonly model: string | undefined,
     private readonly networkAccess: boolean,
+    private readonly sandboxMode: CodexSandboxMode,
+    private readonly approvalPolicy: CodexApprovalPolicy,
     private readonly onProgress: ProgressHandler,
     private readonly onApproval: ApprovalHandler,
     private readonly logger: Logger,
@@ -173,8 +187,8 @@ class AppServerClient {
   async openThread(existingThreadId: string | null): Promise<string> {
     const common = {
       cwd: this.repository.path,
-      approvalPolicy: 'untrusted',
-      sandbox: 'workspace-write',
+      approvalPolicy: this.appServerApprovalPolicy(),
+      sandbox: this.appServerSandboxMode(),
       developerInstructions:
         'Security policy: do not read, print, summarize, copy, or expose .env files, credentials, private keys, tokens, or secret stores. Ask the user to perform secret-dependent operations manually.',
       ...(this.model ? { model: this.model } : {}),
@@ -250,12 +264,8 @@ class AppServerClient {
         threadId,
         input: [{ type: 'text', text: prompt }],
         cwd: this.repository.path,
-        approvalPolicy: 'untrusted',
-        sandboxPolicy: {
-          type: 'workspaceWrite',
-          writableRoots: [this.repository.path],
-          networkAccess: this.networkAccess,
-        },
+        approvalPolicy: this.appServerApprovalPolicy(),
+        sandboxPolicy: this.sandboxPolicy(),
         ...(this.model ? { model: this.model } : {}),
       });
       this.activeTurnId = started.turn.id;
@@ -408,6 +418,30 @@ class AppServerClient {
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
     this.turnCompletion?.reject(error);
+  }
+
+  private appServerApprovalPolicy(): AppServerApprovalPolicy {
+    if (this.approvalPolicy === 'untrusted') return 'unlessTrusted';
+    if (this.approvalPolicy === 'on-request') return 'onRequest';
+    return 'never';
+  }
+
+  private appServerSandboxMode(): AppServerSandboxMode {
+    if (this.sandboxMode === 'read-only') return 'readOnly';
+    if (this.sandboxMode === 'workspace-write') return 'workspaceWrite';
+    return 'dangerFullAccess';
+  }
+
+  private sandboxPolicy(): Record<string, unknown> {
+    const type = this.appServerSandboxMode();
+    if (type === 'workspaceWrite') {
+      return {
+        type,
+        writableRoots: [this.repository.path],
+        networkAccess: this.networkAccess,
+      };
+    }
+    return { type };
   }
 
   private safeEnvironment(): NodeJS.ProcessEnv {
