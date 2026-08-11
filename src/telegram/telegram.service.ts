@@ -313,25 +313,33 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         [{ text: '✕ Cancel task', callback_data: `task:cancel:${ctx.from.id}` }],
       ],
     };
-    const progressMessage = await ctx.reply('Codex is working…', {
+    let activeStatusMessage = await ctx.reply('Codex is working…', {
       reply_markup: cancelMarkup,
     });
     let lastProgressAt = 0;
+    let lastProgress = '';
+
+    const clearActiveCancel = async (): Promise<void> => {
+      await ctx.telegram
+        .editMessageReplyMarkup(
+          ctx.chat!.id,
+          activeStatusMessage.message_id,
+          undefined,
+          { inline_keyboard: [] },
+        )
+        .catch(() => undefined);
+    };
+
     const progress = async (message: string): Promise<void> => {
       const now = Date.now();
-      if (now - lastProgressAt < 2_500) return;
+      if (message === lastProgress || now - lastProgressAt < 2_500) return;
       lastProgressAt = now;
-      try {
-        await ctx.telegram.editMessageText(
-          ctx.chat!.id,
-          progressMessage.message_id,
-          undefined,
-          `Codex is working…\n${message}`,
-          { reply_markup: cancelMarkup },
-        );
-      } catch {
-        // Telegram rejects no-op or stale edits; the final response still gets sent.
-      }
+      lastProgress = message;
+
+      await clearActiveCancel();
+      activeStatusMessage = await ctx.reply(`Codex is working…\n${message}`, {
+        reply_markup: cancelMarkup,
+      });
     };
 
     try {
@@ -341,23 +349,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         progress,
         (request) => this.requestApproval(ctx, request),
       );
-      await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        progressMessage.message_id,
-        undefined,
-        'Task completed.',
-        { reply_markup: { inline_keyboard: [] } },
-      );
+      await clearActiveCancel();
       for (const chunk of this.chunk(response, 4_000)) await ctx.reply(chunk);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        progressMessage.message_id,
-        undefined,
-        `Task failed: ${message}`,
-        { reply_markup: { inline_keyboard: [] } },
-      );
+      await clearActiveCancel();
+      await ctx.reply(`Task failed: ${message}`);
     } finally {
       this.clearApprovalsForChat(ctx.chat.id, 'Task ended before a decision was made.');
     }
