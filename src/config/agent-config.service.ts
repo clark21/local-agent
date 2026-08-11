@@ -16,6 +16,7 @@ export class AgentConfigService {
   readonly databasePath: string;
   readonly codexModel?: string;
   readonly codexPath: string;
+  readonly codexNetworkAccess: boolean;
   readonly taskTimeoutMs: number;
   readonly approvalTimeoutMs: number;
   readonly maxMessageLength: number;
@@ -43,6 +44,10 @@ export class AgentConfigService {
     );
     this.codexModel = config.get<string>('CODEX_MODEL') || undefined;
     this.codexPath = config.get<string>('CODEX_PATH')?.trim() || 'codex';
+    this.codexNetworkAccess = this.boolean(
+      config.get<string>('CODEX_NETWORK_ACCESS'),
+      'CODEX_NETWORK_ACCESS',
+    );
     this.taskTimeoutMs = this.positiveInteger(
       config.get<string>('TASK_TIMEOUT_MS') ?? '1800000',
       'TASK_TIMEOUT_MS',
@@ -110,5 +115,13 @@ export class AgentConfigService {
       throw new Error(`${key} must be a positive integer`);
     }
     return parsed;
+  }
+
+  private boolean(value: string | undefined, key: string): boolean {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) return false;
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    throw new Error(`${key} must be true or false`);
   }
 }

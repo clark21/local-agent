@@ -76,6 +76,7 @@ export class CodexService {
       this.config.codexPath,
       repository,
       this.config.codexModel,
+      this.config.codexNetworkAccess,
       onProgress,
       onApproval,
       this.logger,
@@ -99,6 +100,7 @@ export class CodexService {
       this.config.codexPath,
       repository,
       this.config.codexModel,
+      this.config.codexNetworkAccess,
       () => Promise.resolve(),
       () => Promise.resolve('decline'),
       this.logger,
@@ -127,6 +129,7 @@ class AppServerClient {
     codexPath: string,
     private readonly repository: RepositoryConfig,
     private readonly model: string | undefined,
+    private readonly networkAccess: boolean,
     private readonly onProgress: ProgressHandler,
     private readonly onApproval: ApprovalHandler,
     private readonly logger: Logger,
@@ -251,7 +254,7 @@ class AppServerClient {
         sandboxPolicy: {
           type: 'workspaceWrite',
           writableRoots: [this.repository.path],
-          networkAccess: true,
+          networkAccess: this.networkAccess,
         },
         ...(this.model ? { model: this.model } : {}),
       });

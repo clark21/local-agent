@@ -18,6 +18,34 @@ describe('AgentConfigService', () => {
     expect(service.allowedUserIds.has(123)).toBe(true);
     expect(service.repository('app')).toEqual({ key: 'app', path: '/tmp/app' });
     expect(service.defaultRepository).toBe('app');
+    expect(service.codexNetworkAccess).toBe(false);
+  });
+
+  it('enables Codex network access only when explicitly set to true', () => {
+    const service = new AgentConfigService(
+      config({
+        TELEGRAM_BOT_TOKEN: 'token',
+        TELEGRAM_ALLOWED_USER_IDS: '123',
+        REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+        CODEX_NETWORK_ACCESS: 'true',
+      }),
+    );
+
+    expect(service.codexNetworkAccess).toBe(true);
+  });
+
+  it('rejects an invalid Codex network access value', () => {
+    expect(
+      () =>
+        new AgentConfigService(
+          config({
+            TELEGRAM_BOT_TOKEN: 'token',
+            TELEGRAM_ALLOWED_USER_IDS: '123',
+            REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+            CODEX_NETWORK_ACCESS: 'yes',
+          }),
+        ),
+    ).toThrow('CODEX_NETWORK_ACCESS must be true or false');
   });
 
   it('rejects relative repository paths', () => {

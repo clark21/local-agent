@@ -16,7 +16,7 @@ this application.
 - `workspace-write` filesystem sandbox
 - Telegram approve/reject controls for Codex approval requests
 - Approval timeout with fail-closed rejection
-- No unattended Codex privilege escalation or network access
+- Codex network access disabled by default
 - One active task per chat
 - Task timeout and cancellation
 - Progress updates and chunked final responses
@@ -63,7 +63,7 @@ Before distributing or running it:
 - Review local project instructions and scripts before allowing Codex to run them.
 
 Codex runs with `workspace-write`, the `untrusted` approval policy, and agent
-network access disabled. When Codex app-server requests approval for a command
+network access disabled by default. When Codex app-server requests approval for a command
 or file change, the bot pauses the turn and shows Approve once, Approve session,
 Reject, and Cancel action buttons. An unanswered prompt is rejected after the
 configured timeout.
@@ -198,6 +198,7 @@ DEFAULT_REPOSITORY=web-app
 DATABASE_PATH=./data/agent.db
 CODEX_MODEL=
 CODEX_PATH=codex
+CODEX_NETWORK_ACCESS=false
 TASK_TIMEOUT_MS=1800000
 APPROVAL_TIMEOUT_MS=300000
 MAX_MESSAGE_LENGTH=12000
@@ -214,6 +215,7 @@ MAX_MESSAGE_LENGTH=12000
 | `DATABASE_PATH` | No | SQLite file; defaults to `./data/agent.db`. |
 | `CODEX_MODEL` | No | Explicit Codex model. Empty uses the local Codex default. |
 | `CODEX_PATH` | No | Codex CLI executable; defaults to `codex`. |
+| `CODEX_NETWORK_ACCESS` | No | Set to `true` to allow outbound network access for Codex turns; defaults to `false`. |
 | `TASK_TIMEOUT_MS` | No | Maximum turn duration; defaults to 30 minutes. |
 | `APPROVAL_TIMEOUT_MS` | No | Approval lifetime; defaults to 5 minutes, then rejects. |
 | `MAX_MESSAGE_LENGTH` | No | Maximum accepted prompt length; defaults to 12,000 characters. |
@@ -445,9 +447,9 @@ Confirm `.env` exists in the application working directory. Check that
 
 ### A task cannot install dependencies or use the internet
 
-Codex agent network access remains disabled. Approving a command does not
-automatically grant network access. Install reviewed dependencies manually or
-add a separately reviewed network-permission design.
+Codex agent network access is disabled unless `CODEX_NETWORK_ACCESS=true`.
+Approving a command does not automatically grant network access. Enable it only
+after reviewing the security impact.
 
 ### An approval button says it expired
 
@@ -485,8 +487,8 @@ npm start             # run compiled application
 
 - Telegram text messages only; files, images, voice notes, and replies are not
   passed to Codex.
-- Command and file-change approvals are supported; network permission grants
-  remain disabled.
+- Command and file-change approvals are supported; network access is configured
+  globally for agent turns rather than granted per command.
 - One application process; active-task coordination is in memory.
 - No per-user role system beyond the global Telegram user-ID allowlist.
 - Prompts and results are stored locally without application-level encryption.
