@@ -308,11 +308,12 @@ same bot token; Telegram updates may be consumed by either process.
 | `/help` | Displays command help. |
 | Plain text | Runs the message as a Codex task. |
 
-While a task is running, meaningful progress updates edit a single status
-message instead of appending new messages to the chat. The status message
-includes a **✕ Cancel task** button. Only the user who started the task can use
-it. The button requests the same cancellation as `/cancel` and disappears when
-the task ends.
+While a task is running, meaningful progress updates are appended to the chat.
+Only the newest progress message includes a **✕ Cancel task** button, keeping
+the active control at the bottom of the conversation. The button is removed
+from the previous update before the next one is sent. Only the user who started
+the task can use it. The button requests the same cancellation as `/cancel` and
+disappears when the task ends.
 
 Thread IDs are stored in SQLite. Follow-up messages continue the same Codex
 conversation, including after a service restart, until `/new` is used or the
@@ -329,7 +330,7 @@ Telegram applies several limits that affect this service:
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 4,096 characters per text message                       | Final Codex responses are already split into chunks of at most 4,000 characters. A prompt typed directly in Telegram is also practically limited to one Telegram message, even if `MAX_MESSAGE_LENGTH` is higher. |
 | About 1 outgoing message per second in one private chat | Short bursts may succeed, but sustained faster delivery can return HTTP `429 Too Many Requests`.                                                                                                                  |
-| 20 outgoing messages per minute in one group            | Progress is edited in one status message, reducing message volume. The edits are still Bot API operations and can be throttled.                                                                                  |
+| 20 outgoing messages per minute in one group            | Progress messages can currently be created every 2.5 seconds, which could reach 24 messages per minute and exceed this limit.                                                                                     |
 | About 30 outgoing messages per second across the bot    | Several active chats or a broadcast can exceed the free global rate. Paid broadcasts can raise the broadcast limit, but are unnecessary for normal small-team use.                                                |
 | One active Codex task per chat in this application      | This is an application safeguard, not a Telegram limit. Different chats can still run concurrently and contribute to the bot-wide rate.                                                                           |
 
