@@ -201,6 +201,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
     });
 
+    this.bot.action(/^task:cancel:(\d+)$/, async (ctx) => {
+      const taskOwnerId = Number(ctx.match[1]);
+      if (ctx.from.id !== taskOwnerId) {
+        await ctx.answerCbQuery('Only the user who started this task can cancel it.', {
+          show_alert: true,
+        }).catch(() => undefined);
+        return;
+      }
+
+      const cancelled = ctx.chat ? this.tasks.cancel(ctx.chat.id) : false;
+      await ctx
+        .answerCbQuery(cancelled ? 'Cancellation requested.' : 'This task has already ended.')
+        .catch(() => undefined);
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => undefined);
+    });
+
     this.bot.action(/^approval:([a-f0-9]+):(once|session|reject|cancel)$/, async (ctx) => {
       const [, token, action] = ctx.match;
       const pending = this.pendingApprovals.get(token);
@@ -291,8 +307,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handleTask(ctx: Context, prompt: string): Promise<void> {
-    if (!ctx.chat) return;
-    const progressMessage = await ctx.reply('Codex is working…');
+    if (!ctx.chat || !ctx.from) return;
+    const cancelMarkup = {
+      inline_keyboard: [
+        [{ text: '✕ Cancel task', callback_data: `task:cancel:${ctx.from.id}` }],
+      ],
+    };
+    const progressMessage = await ctx.reply('Codex is working…', {
+      reply_markup: cancelMarkup,
+    });
     let lastProgressAt = 0;
     const progress = async (message: string): Promise<void> => {
       const now = Date.now();
@@ -304,6 +327,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           progressMessage.message_id,
           undefined,
           `Codex is working…\n${message}`,
+          { reply_markup: cancelMarkup },
         );
       } catch {
         // Telegram rejects no-op or stale edits; the final response still gets sent.
@@ -322,6 +346,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         progressMessage.message_id,
         undefined,
         'Task completed.',
+        { reply_markup: { inline_keyboard: [] } },
       );
       for (const chunk of this.chunk(response, 4_000)) await ctx.reply(chunk);
     } catch (error) {
@@ -331,6 +356,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         progressMessage.message_id,
         undefined,
         `Task failed: ${message}`,
+        { reply_markup: { inline_keyboard: [] } },
       );
     } finally {
       this.clearApprovalsForChat(ctx.chat.id, 'Task ended before a decision was made.');

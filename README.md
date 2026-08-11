@@ -304,6 +304,10 @@ same bot token; Telegram updates may be consumed by either process.
 | `/help` | Displays command help. |
 | Plain text | Runs the message as a Codex task. |
 
+While a task is running, its progress message includes a **✕ Cancel task**
+button. Only the user who started the task can use it. The button requests the
+same cancellation as `/cancel` and disappears when the task ends.
+
 Thread IDs are stored in SQLite. Follow-up messages continue the same Codex
 conversation, including after a service restart, until `/new` is used or the
 repository is changed. `/threads` queries Codex's local history, filters it to
