@@ -251,7 +251,7 @@ class AppServerClient {
         sandboxPolicy: {
           type: 'workspaceWrite',
           writableRoots: [this.repository.path],
-          networkAccess: false,
+          networkAccess: true,
         },
         ...(this.model ? { model: this.model } : {}),
       });
