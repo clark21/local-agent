@@ -308,11 +308,11 @@ same bot token; Telegram updates may be consumed by either process.
 | `/help` | Displays command help. |
 | Plain text | Runs the message as a Codex task. |
 
-While a task is running, meaningful progress updates are appended to the chat.
-Only the newest progress message includes a **✕ Cancel task** button; the
-button is removed from the previous update before the next one is sent. Only
-the user who started the task can use it. The button requests the same
-cancellation as `/cancel` and disappears when the task ends.
+While a task is running, meaningful progress updates edit a single status
+message instead of appending new messages to the chat. The status message
+includes a **✕ Cancel task** button. Only the user who started the task can use
+it. The button requests the same cancellation as `/cancel` and disappears when
+the task ends.
 
 Thread IDs are stored in SQLite. Follow-up messages continue the same Codex
 conversation, including after a service restart, until `/new` is used or the
@@ -320,6 +320,30 @@ repository is changed. `/threads` queries Codex's local history, filters it to
 the selected repository, and displays up to ten recent threads. Only the user
 who requested that list may select one, and its buttons expire after the
 configured approval timeout.
+
+## Telegram Bot API limits
+
+Telegram applies several limits that affect this service:
+
+| Limit                                                   | Effect on this service                                                                                                                                                                                            |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4,096 characters per text message                       | Final Codex responses are already split into chunks of at most 4,000 characters. A prompt typed directly in Telegram is also practically limited to one Telegram message, even if `MAX_MESSAGE_LENGTH` is higher. |
+| About 1 outgoing message per second in one private chat | Short bursts may succeed, but sustained faster delivery can return HTTP `429 Too Many Requests`.                                                                                                                  |
+| 20 outgoing messages per minute in one group            | Progress is edited in one status message, reducing message volume. The edits are still Bot API operations and can be throttled.                                                                                  |
+| About 30 outgoing messages per second across the bot    | Several active chats or a broadcast can exceed the free global rate. Paid broadcasts can raise the broadcast limit, but are unnecessary for normal small-team use.                                                |
+| One active Codex task per chat in this application      | This is an application safeguard, not a Telegram limit. Different chats can still run concurrently and contribute to the bot-wide rate.                                                                           |
+
+When a rate limit is exceeded, Telegram normally returns a `429` response with
+a `retry_after` value. The current implementation does not have a shared
+outgoing queue or automatic retry policy, so a throttled progress update or
+response chunk may fail.
+
+For the intended personal or small trusted-team deployment, these limits are
+unlikely to matter during ordinary private-chat use. They become more relevant
+in busy groups or with many simultaneous users. See Telegram's official
+[Bots FAQ](https://core.telegram.org/bots/faq) and
+[Bot API documentation](https://core.telegram.org/bots/api) for the current
+limits.
 
 ## Running continuously with systemd
 
@@ -503,6 +527,23 @@ npm start             # run compiled application
 - No per-user role system beyond the global Telegram user-ID allowlist.
 - Prompts and results are stored locally without application-level encryption.
 - Telegram is the only messaging adapter.
+
+## TODO
+
+- [ ] Throttle final-response chunks instead of sending them in an immediate
+      burst.
+- [ ] Honor Telegram `429` responses and retry after the provided `retry_after`
+      delay with bounded backoff and jitter.
+- [ ] Add a per-chat outgoing queue that enforces private-chat and group rate
+      limits.
+- [ ] Add a shared bot-wide limiter below Telegram's free global rate.
+- [ ] Coalesce or discard stale progress updates waiting to be delivered.
+- [ ] Prioritize approval prompts and final answers over optional progress
+      updates.
+- [ ] Add structured logs or metrics for queue depth, retries, discarded
+      progress, and `429` responses.
+- [ ] Send unusually long responses as text files rather than many consecutive
+      messages.
 
 ## Internal distribution checklist
 

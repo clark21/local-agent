@@ -313,7 +313,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         [{ text: '✕ Cancel task', callback_data: `task:cancel:${ctx.from.id}` }],
       ],
     };
-    let activeStatusMessage = await ctx.reply('Codex is working…', {
+    const activeStatusMessage = await ctx.reply('Codex is working…', {
       reply_markup: cancelMarkup,
     });
     let lastProgressAt = 0;
@@ -336,10 +336,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       lastProgressAt = now;
       lastProgress = message;
 
-      await clearActiveCancel();
-      activeStatusMessage = await ctx.reply(`Codex is working…\n${message}`, {
-        reply_markup: cancelMarkup,
-      });
+      await ctx.telegram
+        .editMessageText(
+          ctx.chat!.id,
+          activeStatusMessage.message_id,
+          undefined,
+          this.limit(`Codex is working…\n${message}`, 4_000),
+          { reply_markup: cancelMarkup },
+        )
+        .catch((error: unknown) => {
+          this.logger.debug(
+            `Could not update Telegram progress message: ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
+        });
     };
 
     try {
