@@ -74,7 +74,7 @@ files. Keep production secrets outside agent-accessible workspaces. The service
 filters its child-process environment so its Telegram token and application
 configuration are not inherited by Codex. It instructs Codex not to access
 secret files, but that instruction is defense in depth rather than a hard
-per-file control. The current runtime's legacy `workspaceWrite` policy does not
+per-file control. The runtime's `workspace-write` policy does not
 provide per-file read exclusions; keep sensitive files outside allowlisted
 repositories.
 

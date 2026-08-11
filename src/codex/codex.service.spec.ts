@@ -6,6 +6,9 @@ describe('CodexService app-server integration', () => {
     const service = new CodexService({
       codexPath: resolve('test/fixtures/fake-app-server.sh'),
       codexModel: undefined,
+      codexApprovalPolicy: 'on-request',
+      codexSandboxMode: 'workspace-write',
+      codexNetworkAccess: false,
     } as never);
     const commands: string[] = [];
 

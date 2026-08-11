@@ -1,0 +1,129 @@
+TELEGRAM CODEX AGENT - FUNCTIONALITY TODO
+
+Priority 1 - Reliability and safety
+
+[ ] Recover or mark interrupted tasks after an application restart.
+    On startup, detect audit records still marked as running and either resume
+    them safely or mark them as interrupted with a clear reason and timestamp.
+
+[ ] Persist active-task coordination.
+    Store task locks in the database so multiple application instances cannot
+    run conflicting tasks for the same Telegram chat.
+
+[ ] Add graceful shutdown for active work.
+    Cancel active Codex turns, reject pending approvals, stop accepting new
+    tasks, and save final audit statuses before the application exits.
+
+[ ] Validate configured repository paths at startup.
+    Confirm that every configured path exists, is a directory, and has the
+    read/write permissions required by its configured sandbox mode.
+
+[ ] Add configurable audit-data retention and cleanup.
+    Allow administrators to archive or delete old task, result, and approval
+    records so the database does not grow indefinitely.
+
+[ ] Add optional encryption or redaction for stored data.
+    Protect locally stored prompts, results, and approval details, and redact
+    likely secrets or sensitive values before writing them to the database.
+
+[ ] Add rate limiting and per-user task quotas.
+    Restrict how frequently users can start tasks and how much capacity each
+    user may consume to prevent spam, misuse, or accidental overload.
+
+[ ] Add per-user roles and per-repository permissions.
+    Replace the single global user allowlist with controls defining who may use
+    each repository, approve risky actions, or access administrative commands.
+
+Priority 2 - User-facing capabilities
+
+[ ] Accept Telegram document attachments.
+    Download permitted documents into a safe temporary location and make them
+    available to Codex after validating file type, name, and size.
+
+[ ] Support images, voice notes, captions, and replies.
+    Pass images to supported models, transcribe voice notes, include captions,
+    and preserve relevant context from messages to which a user replies.
+
+[ ] Add an /history command.
+    Show recent tasks for the current chat, including repository, status,
+    timestamp, and a safe summary or link to the result.
+
+[ ] Add an /audit command.
+    Allow authorized users to review command and file-change approval requests,
+    their decisions, actors, and timestamps.
+
+[ ] Improve /threads with management controls.
+    Add pagination and search, and allow users to rename or archive threads
+    instead of showing only the ten most recent entries.
+
+[ ] Add administrator-controlled model selection.
+    Let users choose a model and reasoning level from an explicit list approved
+    by the administrator, with secure defaults and clear current settings.
+
+[ ] Add task queuing and configurable concurrency.
+    Queue requests received while a task is active or allow a controlled number
+    of concurrent tasks per chat and across the whole application.
+
+[ ] Add per-task network approval.
+    Ask whether a specific task may access the network instead of relying only
+    on one global network-access setting for every Codex turn.
+
+[ ] Improve delivery of long responses.
+    Split responses without breaking Markdown or code blocks and offer very
+    large results as downloadable text files.
+
+Priority 3 - Operations and observability
+
+[ ] Add structured, correlated logs.
+    Include task, chat, repository, thread, and turn identifiers in log records
+    so operators can trace one request across all services and processes.
+
+[ ] Add health and readiness checks.
+    Report whether Telegram, SQLite, Codex authentication, and configured
+    repositories are available before the service receives work.
+
+[ ] Add operational metrics.
+    Measure task duration, failures, cancellations, approval latency, active
+    work, and queue depth for dashboards and capacity planning.
+
+[ ] Add administrator failure notifications.
+    Alert designated operators when dependencies become unhealthy or tasks fail
+    repeatedly, while avoiding duplicate or noisy notifications.
+
+[ ] Add automated SQLite backup and maintenance.
+    Schedule safe backups, verify that backups can be restored, and provide
+    documented database integrity and cleanup operations.
+
+[ ] Add database schema migrations.
+    Version database changes and apply them safely so future releases can add or
+    modify tables and columns without losing existing data.
+
+[ ] Add a startup diagnostic command.
+    Check configuration, repository access, database access, Codex availability,
+    and authentication without launching the Telegram bot.
+
+Priority 4 - Quality and extensibility
+
+[ ] Add unit tests for DatabaseService and Telegram handlers.
+    Test database state changes and Telegram commands, callbacks, authorization,
+    message chunking, and error responses independently.
+
+[ ] Add failure-focused integration tests.
+    Verify cancellation, timeouts, malformed app-server messages, approval
+    expiry, and unexpected Codex process exits.
+
+[ ] Add end-to-end workflow tests.
+    Exercise complete flows for user authorization, repository switching,
+    approvals, task execution, cancellation, and thread resumption.
+
+[ ] Add continuous-integration checks.
+    Run linting, type checking, tests, production builds, dependency audits, and
+    container builds automatically for every proposed change.
+
+[ ] Add messaging adapters behind a shared interface.
+    Separate task execution from Telegram-specific behavior so Slack, Teams, or
+    other messaging transports can reuse the same core services.
+
+[ ] Document and test operational procedures.
+    Provide verified steps for upgrades, rollbacks, backups, restoration, token
+    rotation, and incident response.

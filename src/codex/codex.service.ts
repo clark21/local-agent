@@ -63,8 +63,11 @@ interface TurnResponse {
   turn: { id: string };
 }
 
-type AppServerApprovalPolicy = 'unlessTrusted' | 'onRequest' | 'never';
-type AppServerSandboxMode = 'readOnly' | 'workspaceWrite' | 'dangerFullAccess';
+type AppServerApprovalPolicy = CodexApprovalPolicy;
+type TurnSandboxPolicyType =
+  | 'readOnly'
+  | 'workspaceWrite'
+  | 'dangerFullAccess';
 
 @Injectable()
 export class CodexService {
@@ -188,7 +191,7 @@ class AppServerClient {
     const common = {
       cwd: this.repository.path,
       approvalPolicy: this.appServerApprovalPolicy(),
-      sandbox: this.appServerSandboxMode(),
+      sandbox: this.sandboxMode,
       developerInstructions:
         'Security policy: do not read, print, summarize, copy, or expose .env files, credentials, private keys, tokens, or secret stores. Ask the user to perform secret-dependent operations manually.',
       ...(this.model ? { model: this.model } : {}),
@@ -421,19 +424,11 @@ class AppServerClient {
   }
 
   private appServerApprovalPolicy(): AppServerApprovalPolicy {
-    if (this.approvalPolicy === 'untrusted') return 'unlessTrusted';
-    if (this.approvalPolicy === 'on-request') return 'onRequest';
-    return 'never';
-  }
-
-  private appServerSandboxMode(): AppServerSandboxMode {
-    if (this.sandboxMode === 'read-only') return 'readOnly';
-    if (this.sandboxMode === 'workspace-write') return 'workspaceWrite';
-    return 'dangerFullAccess';
+    return this.approvalPolicy;
   }
 
   private sandboxPolicy(): Record<string, unknown> {
-    const type = this.appServerSandboxMode();
+    const type = this.turnSandboxPolicyType();
     if (type === 'workspaceWrite') {
       return {
         type,
@@ -442,6 +437,12 @@ class AppServerClient {
       };
     }
     return { type };
+  }
+
+  private turnSandboxPolicyType(): TurnSandboxPolicyType {
+    if (this.sandboxMode === 'read-only') return 'readOnly';
+    if (this.sandboxMode === 'workspace-write') return 'workspaceWrite';
+    return 'dangerFullAccess';
   }
 
   private safeEnvironment(): NodeJS.ProcessEnv {
