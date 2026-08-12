@@ -109,14 +109,43 @@ export class TaskService {
     const auditId = this.database.startAudit(chatId, repository.key, prompt);
 
     try {
-      const result = await this.codex.run(
-        repository,
-        prompt,
-        session.threadId,
-        abortController.signal,
-        onProgress,
-        onApproval,
-      );
+      const run = (threadId: string | null) =>
+        this.codex.run(
+          repository,
+          prompt,
+          threadId,
+          abortController.signal,
+          onProgress,
+          onApproval,
+        );
+
+      let result;
+      try {
+        result = await run(session.threadId);
+      } catch (error) {
+        if (
+          !session.threadId ||
+          abortController.signal.aborted ||
+          !this.isMissingRolloutError(error)
+        ) {
+          throw error;
+        }
+
+        await onProgress('Saved thread was not found. Retrying once…');
+        try {
+          result = await run(session.threadId);
+        } catch (retryError) {
+          if (
+            abortController.signal.aborted ||
+            !this.isMissingRolloutError(retryError)
+          ) {
+            throw retryError;
+          }
+
+          await onProgress('Saved thread is unavailable. Starting a new thread…');
+          result = await run(null);
+        }
+      }
       this.database.saveThread(chatId, result.threadId);
       this.database.finishAudit(auditId, 'completed', result.response);
       return result.response;
@@ -133,5 +162,12 @@ export class TaskService {
       clearTimeout(timeout);
       this.active.delete(chatId);
     }
+  }
+
+  private isMissingRolloutError(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      /no rollout found for thread id\b/i.test(error.message)
+    );
   }
 }
