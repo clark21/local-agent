@@ -9,6 +9,7 @@ describe('CodexService app-server integration', () => {
       codexApprovalPolicy: 'on-request',
       codexSandboxMode: 'workspace-write',
       codexNetworkAccess: false,
+      codexAllowSecretFileAccess: false,
     } as never);
     const commands: string[] = [];
 

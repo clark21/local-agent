@@ -72,11 +72,13 @@ Approval prompts are not a secret-file boundary. Ordinary reads inside an
 allowlisted repository may not trigger an approval, including reads of `.env`
 files. Keep production secrets outside agent-accessible workspaces. The service
 filters its child-process environment so its Telegram token and application
-configuration are not inherited by Codex. It instructs Codex not to access
-secret files, but that instruction is defense in depth rather than a hard
-per-file control. The runtime's `workspace-write` policy does not
-provide per-file read exclusions; keep sensitive files outside allowlisted
-repositories.
+configuration are not inherited by Codex. By default it instructs Codex not to
+access secret files. `CODEX_ALLOW_SECRET_FILE_ACCESS=true` replaces that rule
+with permission to read secrets when a task requires it, while still forbidding
+secret disclosure in responses and logs. Both modes are instruction-level
+controls rather than hard per-file enforcement. The runtime's `workspace-write`
+policy does not provide per-file read exclusions; keep sensitive files outside
+allowlisted repositories.
 
 ## Prerequisites
 
@@ -199,6 +201,7 @@ DATABASE_PATH=./data/agent.db
 CODEX_MODEL=
 CODEX_PATH=codex
 CODEX_NETWORK_ACCESS=false
+CODEX_ALLOW_SECRET_FILE_ACCESS=false
 CODEX_SANDBOX_MODE=workspace-write
 CODEX_APPROVAL_POLICY=untrusted
 TASK_TIMEOUT_MS=1800000
@@ -218,6 +221,7 @@ MAX_MESSAGE_LENGTH=12000
 | `CODEX_MODEL` | No | Explicit Codex model. Empty uses the local Codex default. |
 | `CODEX_PATH` | No | Codex CLI executable; defaults to `codex`. |
 | `CODEX_NETWORK_ACCESS` | No | Set to `true` to allow outbound network access for Codex turns; missing or invalid values fall back to `false`. |
+| `CODEX_ALLOW_SECRET_FILE_ACCESS` | No | Set to `true` to permit Codex to read secret files inside its sandbox when a task requires it. Defaults to `false`; any value other than `true` is treated as `false`. This is an instruction-level policy, not an OS-enforced per-file boundary. |
 | `CODEX_SANDBOX_MODE` | No | Codex filesystem sandbox: `read-only`, `workspace-write`, or `danger-full-access`; missing or invalid values fall back to `read-only`. |
 | `CODEX_APPROVAL_POLICY` | No | Codex approval policy: `untrusted`, `on-request`, or `never`; missing or invalid values fall back to `untrusted`. |
 | `TASK_TIMEOUT_MS` | No | Maximum turn duration; defaults to 30 minutes. |
@@ -226,6 +230,21 @@ MAX_MESSAGE_LENGTH=12000
 
 Repository keys may contain letters, numbers, `_`, and `-`. Every repository
 path must be absolute. Telegram users can select only keys present in this map.
+
+### Secret-file access
+
+Secret-file access is disabled by default. To let Codex read files such as
+`.env` when a task requires them, set:
+
+```dotenv
+CODEX_ALLOW_SECRET_FILE_ACCESS=true
+```
+
+Restart the service after changing `.env`; configuration is loaded at startup.
+This setting grants permission only within the active filesystem sandbox. It
+does not expand the selected repository or other sandbox boundaries, and it
+does not permit Codex to reproduce secret values in replies, logs, or files.
+Use `false` when secret-file access is not needed.
 
 JSON must remain valid and normally fits on one line. For example:
 

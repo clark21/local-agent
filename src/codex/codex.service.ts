@@ -88,6 +88,7 @@ export class CodexService {
       repository,
       this.config.codexModel,
       this.config.codexNetworkAccess,
+      this.config.codexAllowSecretFileAccess,
       this.config.codexSandboxMode,
       this.config.codexApprovalPolicy,
       onProgress,
@@ -114,6 +115,7 @@ export class CodexService {
       repository,
       this.config.codexModel,
       this.config.codexNetworkAccess,
+      this.config.codexAllowSecretFileAccess,
       this.config.codexSandboxMode,
       this.config.codexApprovalPolicy,
       () => Promise.resolve(),
@@ -145,6 +147,7 @@ class AppServerClient {
     private readonly repository: RepositoryConfig,
     private readonly model: string | undefined,
     private readonly networkAccess: boolean,
+    private readonly allowSecretFileAccess: boolean,
     private readonly sandboxMode: CodexSandboxMode,
     private readonly approvalPolicy: CodexApprovalPolicy,
     private readonly onProgress: ProgressHandler,
@@ -192,8 +195,7 @@ class AppServerClient {
       cwd: this.repository.path,
       approvalPolicy: this.appServerApprovalPolicy(),
       sandbox: this.sandboxMode,
-      developerInstructions:
-        'Security policy: do not read, print, summarize, copy, or expose .env files, credentials, private keys, tokens, or secret stores. Ask the user to perform secret-dependent operations manually.',
+      developerInstructions: this.secretFileInstructions(),
       ...(this.model ? { model: this.model } : {}),
     };
     const response = existingThreadId
@@ -425,6 +427,13 @@ class AppServerClient {
 
   private appServerApprovalPolicy(): AppServerApprovalPolicy {
     return this.approvalPolicy;
+  }
+
+  private secretFileInstructions(): string {
+    if (this.allowSecretFileAccess) {
+      return 'Secret-file access is enabled by the application owner. You may read secret files inside the active sandbox when required for the user\'s task. Never reproduce secret values in chat, progress updates, command output, logs, or committed files.';
+    }
+    return 'Security policy: do not read, print, summarize, copy, or expose .env files, credentials, private keys, tokens, or secret stores. Ask the user to perform secret-dependent operations manually.';
   }
 
   private sandboxPolicy(): Record<string, unknown> {

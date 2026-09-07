@@ -19,6 +19,7 @@ describe('AgentConfigService', () => {
     expect(service.repository('app')).toEqual({ key: 'app', path: '/tmp/app' });
     expect(service.defaultRepository).toBe('app');
     expect(service.codexNetworkAccess).toBe(false);
+    expect(service.codexAllowSecretFileAccess).toBe(false);
     expect(service.codexSandboxMode).toBe('read-only');
     expect(service.codexApprovalPolicy).toBe('untrusted');
   });
@@ -47,6 +48,28 @@ describe('AgentConfigService', () => {
     );
 
     expect(service.codexNetworkAccess).toBe(false);
+  });
+
+  it('allows secret-file access only when explicitly set to true', () => {
+    const enabled = new AgentConfigService(
+      config({
+        TELEGRAM_BOT_TOKEN: 'token',
+        TELEGRAM_ALLOWED_USER_IDS: '123',
+        REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+        CODEX_ALLOW_SECRET_FILE_ACCESS: 'true',
+      }),
+    );
+    const invalid = new AgentConfigService(
+      config({
+        TELEGRAM_BOT_TOKEN: 'token',
+        TELEGRAM_ALLOWED_USER_IDS: '123',
+        REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+        CODEX_ALLOW_SECRET_FILE_ACCESS: 'yes',
+      }),
+    );
+
+    expect(enabled.codexAllowSecretFileAccess).toBe(true);
+    expect(invalid.codexAllowSecretFileAccess).toBe(false);
   });
 
   it('configures the Codex sandbox and approval policy', () => {

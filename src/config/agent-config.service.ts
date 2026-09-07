@@ -23,6 +23,7 @@ export class AgentConfigService {
   readonly codexModel?: string;
   readonly codexPath: string;
   readonly codexNetworkAccess: boolean;
+  readonly codexAllowSecretFileAccess: boolean;
   readonly codexSandboxMode: CodexSandboxMode;
   readonly codexApprovalPolicy: CodexApprovalPolicy;
   readonly taskTimeoutMs: number;
@@ -54,6 +55,9 @@ export class AgentConfigService {
     this.codexPath = config.get<string>('CODEX_PATH')?.trim() || 'codex';
     this.codexNetworkAccess = this.boolean(
       config.get<string>('CODEX_NETWORK_ACCESS'),
+    );
+    this.codexAllowSecretFileAccess = this.boolean(
+      config.get<string>('CODEX_ALLOW_SECRET_FILE_ACCESS'),
     );
     this.codexSandboxMode = this.oneOf(
       config.get<string>('CODEX_SANDBOX_MODE'),
