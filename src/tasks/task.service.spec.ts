@@ -8,7 +8,12 @@ describe('TaskService', () => {
     repository: (key: string) =>
       key === 'app' ? { key: 'app', path: '/tmp/app' } : undefined,
   };
-  const session = { chatId: 1, repositoryKey: 'app', threadId: null };
+  const session = {
+    chatId: 1,
+    repositoryKey: 'app',
+    threadId: null,
+    provider: 'codex' as const,
+  };
   let database: {
     getOrCreateSession: jest.Mock;
     startAudit: jest.Mock;
@@ -16,6 +21,7 @@ describe('TaskService', () => {
     saveThread: jest.Mock;
     clearThread: jest.Mock;
     selectRepository: jest.Mock;
+    selectProvider: jest.Mock;
   };
 
   beforeEach(() => {
@@ -26,6 +32,7 @@ describe('TaskService', () => {
       saveThread: jest.fn(),
       clearThread: jest.fn(),
       selectRepository: jest.fn(),
+      selectProvider: jest.fn(),
     };
   });
 
@@ -77,6 +84,7 @@ describe('TaskService', () => {
     expect(codex.run).toHaveBeenCalledTimes(3);
     expect(codex.run).toHaveBeenNthCalledWith(
       1,
+      'codex',
       expect.anything(),
       'fix it',
       'thread-missing',
@@ -86,6 +94,7 @@ describe('TaskService', () => {
     );
     expect(codex.run).toHaveBeenNthCalledWith(
       2,
+      'codex',
       expect.anything(),
       'fix it',
       'thread-missing',
@@ -95,6 +104,7 @@ describe('TaskService', () => {
     );
     expect(codex.run).toHaveBeenNthCalledWith(
       3,
+      'codex',
       expect.anything(),
       'fix it',
       null,
@@ -116,6 +126,58 @@ describe('TaskService', () => {
       'completed',
       'recovered',
     );
+  });
+
+  it('starts a new thread when a saved Claude session no longer exists', async () => {
+    const missingSession = new Error(
+      'Claude CLI failed: No conversation found with session ID: session-missing',
+    );
+    const agents = {
+      run: jest
+        .fn()
+        .mockRejectedValueOnce(missingSession)
+        .mockRejectedValueOnce(missingSession)
+        .mockResolvedValueOnce({ response: 'recovered', threadId: 'session-new' }),
+    };
+    database.getOrCreateSession.mockReturnValue({
+      ...session,
+      provider: 'claude',
+      threadId: 'session-missing',
+    });
+    const service = new TaskService(config as never, database as never, agents as never);
+
+    await expect(
+      service.execute(
+        1,
+        'fix it',
+        () => Promise.resolve(),
+        () => Promise.resolve('decline'),
+      ),
+    ).resolves.toBe('recovered');
+
+    expect(agents.run).toHaveBeenCalledTimes(3);
+    expect(agents.run).toHaveBeenLastCalledWith(
+      'claude',
+      expect.anything(),
+      'fix it',
+      null,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(database.saveThread).toHaveBeenCalledWith(1, 'session-new');
+    expect(database.startAudit).toHaveBeenCalledWith(1, 'app', 'claude', 'fix it');
+  });
+
+  it('switches providers and starts a fresh provider thread', () => {
+    const service = new TaskService(
+      { ...config, defaultAgent: 'codex' } as never,
+      database as never,
+      { run: jest.fn() } as never,
+    );
+
+    expect(service.selectAgent(1, 'claude')).toBe(true);
+    expect(database.selectProvider).toHaveBeenCalledWith(1, 'claude');
   });
 
   it('does not replace a thread for unrelated failures', async () => {
@@ -174,8 +236,9 @@ describe('TaskService', () => {
       { run: jest.fn() } as never,
     );
 
-    expect(service.resumeThread(1, 'other', 'thread-x')).toBe(false);
-    expect(service.resumeThread(1, 'app', 'thread-x')).toBe(true);
+    expect(service.resumeThread(1, 'other', 'codex', 'thread-x')).toBe(false);
+    expect(service.resumeThread(1, 'app', 'claude', 'thread-x')).toBe(false);
+    expect(service.resumeThread(1, 'app', 'codex', 'thread-x')).toBe(true);
     expect(database.saveThread).toHaveBeenCalledWith(1, 'thread-x');
   });
 });

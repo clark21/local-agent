@@ -36,9 +36,9 @@ Priority 1 - Reliability and safety
 
 Priority 2 - User-facing capabilities
 
-[ ] Accept Telegram document attachments.
-    Download permitted documents into a safe temporary location and make them
-    available to Codex after validating file type, name, and size.
+[x] Accept Telegram document attachments.
+    Permitted documents are downloaded into a per-task temporary location,
+    validated by file name, extension, and size, then removed after the task.
 
 [ ] Support images, voice notes, captions, and replies.
     Pass images to supported models, transcribe voice notes, include captions,

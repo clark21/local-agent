@@ -1,16 +1,20 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Context, Telegraf } from 'telegraf';
 import { randomBytes } from 'node:crypto';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { basename, extname, join, relative, resolve } from 'node:path';
 import {
   ApprovalDecision,
   ApprovalRequest,
-  CodexService,
 } from '../codex/codex.service';
+import { AgentProvider } from '../config/agent-config.service';
 import { AgentConfigService } from '../config/agent-config.service';
 import { DatabaseService } from '../database/database.service';
 import { TaskService } from '../tasks/task.service';
 
-const HELP = `Local Codex agent commands:
+const HELP = `Local coding agent commands:
+/agent - show or select Codex/Claude
+/agent <codex|claude> - select an agent and start a fresh thread
 /repo - list repositories
 /repo <name> - select a repository and start a fresh thread
 /threads - list and resume recent threads for the current repository
@@ -20,6 +24,11 @@ const HELP = `Local Codex agent commands:
 /help - show this help
 
 Send a normal text message to run a task.`;
+
+const ALLOWED_DOCUMENT_EXTENSIONS = new Set([
+  '.txt', '.md', '.mdx', '.json', '.yaml', '.yml', '.csv', '.tsv', '.log',
+  '.xml', '.html', '.htm', '.pdf', '.docx', '.xlsx', '.pptx',
+]);
 
 interface PendingApproval {
   chatId: number;
@@ -34,6 +43,7 @@ interface PendingThreadSelection {
   chatId: number;
   userId: number;
   repositoryKey: string;
+  provider: AgentProvider;
   threadId: string;
   timer: NodeJS.Timeout;
 }
@@ -52,7 +62,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly config: AgentConfigService,
     private readonly tasks: TaskService,
     private readonly database: DatabaseService,
-    private readonly codex: CodexService,
   ) {
     this.bot = new Telegraf(config.telegramToken);
     this.registerHandlers();
@@ -61,8 +70,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     await this.bot.telegram.setMyCommands([
       { command: 'repo', description: 'List or select a repository' },
+      { command: 'agent', description: 'Show or select Codex/Claude' },
       { command: 'threads', description: 'List and resume recent threads' },
-      { command: 'new', description: 'Start a fresh Codex thread' },
+      { command: 'new', description: 'Start a fresh agent thread' },
       { command: 'status', description: 'Show task status' },
       { command: 'cancel', description: 'Cancel the active task' },
       { command: 'help', description: 'Show help' },
@@ -95,6 +105,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.start((ctx) => ctx.reply(HELP));
     this.bot.help((ctx) => ctx.reply(HELP));
 
+    this.bot.command('agent', async (ctx) => {
+      const requested = ctx.message.text
+        .replace(/^\/agent(?:@\w+)?\s*/i, '')
+        .trim()
+        .toLowerCase();
+      const current = this.tasks.session(ctx.chat.id).provider;
+      if (!requested) {
+        await ctx.reply(`Current agent: ${this.agentName(current)}.\n\nChoose an agent:`, {
+          reply_markup: {
+            inline_keyboard: [[
+              { text: current === 'codex' ? '✓ Codex' : 'Codex', callback_data: `agent:codex:${ctx.from.id}` },
+              { text: current === 'claude' ? '✓ Claude' : 'Claude', callback_data: `agent:claude:${ctx.from.id}` },
+            ]],
+          },
+        });
+        return;
+      }
+      if (requested !== 'codex' && requested !== 'claude') {
+        await ctx.reply('Unknown agent. Use /agent codex or /agent claude.');
+        return;
+      }
+      await this.selectAgent(ctx, requested);
+    });
+
+    this.bot.action(/^agent:(codex|claude):(\d+)$/, async (ctx) => {
+      const provider = ctx.match[1] as AgentProvider;
+      if (ctx.from.id !== Number(ctx.match[2])) {
+        await ctx.answerCbQuery('Only the user who opened this menu can select an agent.', {
+          show_alert: true,
+        }).catch(() => undefined);
+        return;
+      }
+      if (!ctx.chat) return;
+      if (!this.tasks.selectAgent(ctx.chat.id, provider)) {
+        await ctx.answerCbQuery('Cannot switch agents while a task is running.', {
+          show_alert: true,
+        }).catch(() => undefined);
+        return;
+      }
+      await ctx.answerCbQuery(`${this.agentName(provider)} selected.`).catch(() => undefined);
+      await ctx.editMessageText(
+        `${this.agentName(provider)} selected. A fresh thread will be used for the next message.`,
+      ).catch(() => undefined);
+    });
+
     this.bot.command('repo', async (ctx) => {
       const requested = ctx.message.text.replace(/^\/repo(?:@\w+)?\s*/i, '').trim();
       if (!requested) {
@@ -113,13 +168,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         await ctx.reply('Cannot switch repositories while a task is running.');
         return;
       }
-      await ctx.reply(`Selected ${requested}. A fresh Codex thread will be used.`);
+      const provider = this.tasks.session(ctx.chat.id).provider;
+      await ctx.reply(`Selected ${requested}. A fresh ${this.agentName(provider)} thread will be used.`);
     });
 
     this.bot.command('new', async (ctx) => {
       await ctx.reply(
         this.tasks.newThread(ctx.chat.id)
-          ? 'A fresh Codex thread will be used for the next message.'
+          ? `A fresh ${this.agentName(this.tasks.session(ctx.chat.id).provider)} thread will be used for the next message.`
           : 'Cannot reset the thread while a task is running.',
       );
     });
@@ -137,9 +193,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       }
       await ctx.reply(`Loading recent threads for ${repository.key}…`);
       try {
-        const threads = await this.codex.listThreads(repository, 10);
+        const provider = this.tasks.session(ctx.chat.id).provider;
+        const threads = await this.tasks.listThreads(ctx.chat.id, 10);
         if (threads.length === 0) {
-          await ctx.reply(`No saved Codex threads found for ${repository.key}.`);
+          const detail = provider === 'claude'
+            ? 'Claude CLI does not currently expose a machine-readable session list; the active saved session still resumes automatically.'
+            : `No saved Codex threads found for ${repository.key}.`;
+          await ctx.reply(detail);
           return;
         }
         this.clearThreadSelectionsForChat(ctx.chat.id);
@@ -153,6 +213,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             chatId: ctx.chat.id,
             userId: ctx.from.id,
             repositoryKey: repository.key,
+            provider,
             threadId: thread.id,
             timer,
           });
@@ -188,8 +249,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const status = this.tasks.status(ctx.chat.id);
       await ctx.reply(
         status.running
-          ? `Running in ${status.repositoryKey} for ${status.elapsedSeconds}s.`
-          : `Idle. Current repository: ${status.repositoryKey}.`,
+          ? `${this.agentName(status.provider)} running in ${status.repositoryKey} for ${status.elapsedSeconds}s.`
+          : `Idle. Agent: ${this.agentName(status.provider)}. Repository: ${status.repositoryKey}.`,
       );
     });
 
@@ -272,6 +333,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const resumed = this.tasks.resumeThread(
         selection.chatId,
         selection.repositoryKey,
+        selection.provider,
         selection.threadId,
       );
       if (!resumed) {
@@ -301,9 +363,96 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       });
     });
 
+    this.bot.on('document', (ctx) => {
+      // As with text updates, keep polling available for approval callbacks.
+      void this.handleDocument(ctx).catch((error: unknown) => {
+        this.logger.error(
+          `Detached Telegram document task failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      });
+    });
+
     this.bot.catch((error, ctx) => {
       this.logger.error(`Telegram update ${ctx.update.update_id} failed`, error);
     });
+  }
+
+  private async handleDocument(ctx: Context): Promise<void> {
+    const message = ctx.message;
+    if (!ctx.chat || !ctx.from || !message || !('document' in message)) return;
+    const document = message.document;
+    const filename = this.safeDocumentName(document.file_name);
+    const extension = extname(filename).toLowerCase();
+    if (!ALLOWED_DOCUMENT_EXTENSIONS.has(extension)) {
+      await ctx.reply(
+        `Unsupported document type. Allowed: ${[...ALLOWED_DOCUMENT_EXTENSIONS].join(', ')}`,
+      );
+      return;
+    }
+    if (!document.file_size || document.file_size > this.config.maxDocumentBytes) {
+      await ctx.reply(
+        `Document is too large. The limit is ${this.formatBytes(this.config.maxDocumentBytes)}.`,
+      );
+      return;
+    }
+
+    const repository = this.config.repository(this.tasks.session(ctx.chat.id).repositoryKey);
+    if (!repository) {
+      await ctx.reply('The selected repository is no longer configured.');
+      return;
+    }
+
+    const uploadDirectory = resolve(repository.path, '.codex-agent', 'uploads');
+    const uploadPath = join(uploadDirectory, `${randomBytes(12).toString('hex')}-${filename}`);
+    try {
+      await mkdir(uploadDirectory, { recursive: true });
+      const fileUrl = await ctx.telegram.getFileLink(document.file_id);
+      const response = await fetch(fileUrl.href);
+      if (!response.ok || !response.body) {
+        throw new Error(`Telegram download failed (${response.status})`);
+      }
+      const contentLength = Number(response.headers.get('content-length'));
+      if (Number.isFinite(contentLength) && contentLength > this.config.maxDocumentBytes) {
+        throw new Error('Telegram download exceeded the configured document limit');
+      }
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length > this.config.maxDocumentBytes) {
+        throw new Error('Telegram download exceeded the configured document limit');
+      }
+      await writeFile(uploadPath, bytes, { flag: 'wx' });
+    } catch (error) {
+      await rm(uploadPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+
+    const prompt = this.documentPrompt(
+      relative(repository.path, uploadPath),
+      filename,
+      message.caption,
+    );
+    try {
+      await this.handleTask(ctx, prompt);
+    } finally {
+      await rm(uploadPath, { force: true }).catch((error: unknown) => {
+        this.logger.warn(
+          `Could not remove temporary upload ${filename}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      });
+    }
+  }
+
+  private safeDocumentName(name: string | undefined): string {
+    const value = basename(name ?? 'document');
+    return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'document';
+  }
+
+  private documentPrompt(path: string, filename: string, caption: string | undefined): string {
+    const request = caption?.trim() || 'Inspect the uploaded document and help with it.';
+    return `The user uploaded "${filename}" for this task. It is temporarily available inside the current repository at "${path}". Read it only as needed; do not copy it into tracked project files unless the user asks.\n\nUser request: ${request}`;
+  }
+
+  private formatBytes(bytes: number): string {
+    return `${Math.ceil(bytes / (1024 * 1024))} MB`;
   }
 
   private async handleTask(ctx: Context, prompt: string): Promise<void> {
@@ -313,7 +462,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         [{ text: '✕ Cancel task', callback_data: `task:cancel:${ctx.from.id}` }],
       ],
     };
-    let activeStatusMessage = await ctx.reply('Codex is working…', {
+    const provider = this.tasks.session(ctx.chat.id).provider;
+    const agentName = this.agentName(provider);
+    let activeStatusMessage = await ctx.reply(`${agentName} is working…`, {
       reply_markup: cancelMarkup,
     });
     let lastProgressAt = 0;
@@ -338,7 +489,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       await clearActiveCancel();
       activeStatusMessage = await ctx.reply(
-        this.limit(`Codex is working…\n${message}`, 4_000),
+        this.limit(`${agentName} is working…\n${message}`, 4_000),
         { reply_markup: cancelMarkup },
       );
     };
@@ -450,10 +601,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   private approvalSummary(request: ApprovalRequest): string {
-    const title =
-      request.type === 'command'
-        ? '⚠️ Codex requests command approval'
-        : '⚠️ Codex requests file-change approval';
+    const titles: Record<ApprovalRequest['type'], string> = {
+      command: '⚠️ Agent requests command approval',
+      'file-change': '⚠️ Agent requests file-change approval',
+      tool: '⚠️ Agent requests tool approval',
+    };
+    const title = titles[request.type];
     const details = [
       request.command ? `Command:\n${this.limit(request.command, 1_500)}` : undefined,
       request.cwd ? `Directory: ${request.cwd}` : undefined,
@@ -466,11 +619,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private decisionLabel(decision: ApprovalDecision): string {
     const labels: Record<ApprovalDecision, string> = {
       accept: 'Approved once',
-      acceptForSession: 'Approved for this Codex session',
+      acceptForSession: 'Approved for this agent session',
       decline: 'Rejected',
       cancel: 'Cancelled',
     };
     return labels[decision];
+  }
+
+  private async selectAgent(ctx: Context, provider: AgentProvider): Promise<void> {
+    if (!ctx.chat) return;
+    if (!this.tasks.selectAgent(ctx.chat.id, provider)) {
+      await ctx.reply('Cannot switch agents while a task is running.');
+      return;
+    }
+    await ctx.reply(
+      `${this.agentName(provider)} selected. A fresh thread will be used for the next message.`,
+    );
+  }
+
+  private agentName(provider: AgentProvider): string {
+    return provider === 'claude' ? 'Claude' : 'Codex';
   }
 
   private limit(value: string, max: number): string {

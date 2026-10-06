@@ -12,6 +12,7 @@ export type CodexSandboxMode =
   | 'workspace-write'
   | 'danger-full-access';
 export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never';
+export type AgentProvider = 'codex' | 'claude';
 
 @Injectable()
 export class AgentConfigService {
@@ -26,9 +27,13 @@ export class AgentConfigService {
   readonly codexAllowSecretFileAccess: boolean;
   readonly codexSandboxMode: CodexSandboxMode;
   readonly codexApprovalPolicy: CodexApprovalPolicy;
+  readonly defaultAgent: AgentProvider;
+  readonly claudePath: string;
+  readonly claudeModel?: string;
   readonly taskTimeoutMs: number;
   readonly approvalTimeoutMs: number;
   readonly maxMessageLength: number;
+  readonly maxDocumentBytes: number;
 
   constructor(config: ConfigService) {
     this.telegramToken = this.required(config, 'TELEGRAM_BOT_TOKEN');
@@ -69,6 +74,13 @@ export class AgentConfigService {
       ['untrusted', 'on-request', 'never'] as const,
       'untrusted',
     );
+    this.defaultAgent = this.oneOf(
+      config.get<string>('DEFAULT_AGENT'),
+      ['codex', 'claude'] as const,
+      'codex',
+    );
+    this.claudePath = config.get<string>('CLAUDE_PATH')?.trim() || 'claude';
+    this.claudeModel = config.get<string>('CLAUDE_MODEL')?.trim() || undefined;
     this.taskTimeoutMs = this.positiveInteger(
       config.get<string>('TASK_TIMEOUT_MS') ?? '1800000',
       'TASK_TIMEOUT_MS',
@@ -76,6 +88,10 @@ export class AgentConfigService {
     this.maxMessageLength = this.positiveInteger(
       config.get<string>('MAX_MESSAGE_LENGTH') ?? '12000',
       'MAX_MESSAGE_LENGTH',
+    );
+    this.maxDocumentBytes = this.positiveInteger(
+      config.get<string>('MAX_DOCUMENT_BYTES') ?? '10485760',
+      'MAX_DOCUMENT_BYTES',
     );
     this.approvalTimeoutMs = this.positiveInteger(
       config.get<string>('APPROVAL_TIMEOUT_MS') ?? '300000',

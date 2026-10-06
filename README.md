@@ -1,7 +1,7 @@
-# Telegram Codex Agent
+# Telegram Codex/Claude Agent
 
 A local NestJS service that receives tasks through Telegram and runs them with
-Codex inside explicitly allowlisted project directories. It is intended for
+Codex or Claude Code inside explicitly allowlisted project directories. It is intended for
 small, trusted internal teams and personal development machines.
 
 The Telegram bot is only the remote control. The service, Codex process,
@@ -12,7 +12,8 @@ this application.
 
 - Telegram numeric user-ID allowlist
 - Explicit repository allowlist
-- Persistent Codex conversation per Telegram chat and repository
+- Persistent provider-specific conversation per Telegram chat and repository
+- Per-chat Codex/Claude selection with `/agent`
 - `workspace-write` filesystem sandbox
 - Telegram approve/reject controls for Codex approval requests
 - Approval timeout with fail-closed rejection
@@ -88,6 +89,7 @@ allowlisted repositories.
 - A Telegram account
 - A Telegram bot token created by the official `@BotFather`
 - A working Codex authentication session on the host
+- Optional: an authenticated Claude Code CLI for Claude tasks
 - At least one local project directory
 
 Check the local tools:
@@ -198,15 +200,19 @@ TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
 REPOSITORIES_JSON={"web-app":"/home/alice/projects/web-app","api":"/home/alice/projects/api"}
 DEFAULT_REPOSITORY=web-app
 DATABASE_PATH=./data/agent.db
+DEFAULT_AGENT=codex
 CODEX_MODEL=
 CODEX_PATH=codex
 CODEX_NETWORK_ACCESS=false
 CODEX_ALLOW_SECRET_FILE_ACCESS=false
 CODEX_SANDBOX_MODE=workspace-write
 CODEX_APPROVAL_POLICY=untrusted
+CLAUDE_PATH=claude
+CLAUDE_MODEL=
 TASK_TIMEOUT_MS=1800000
 APPROVAL_TIMEOUT_MS=300000
 MAX_MESSAGE_LENGTH=12000
+MAX_DOCUMENT_BYTES=10485760
 ```
 
 ### Environment variable reference
@@ -218,15 +224,19 @@ MAX_MESSAGE_LENGTH=12000
 | `REPOSITORIES_JSON` | Yes | JSON object mapping short names to absolute project paths. |
 | `DEFAULT_REPOSITORY` | No | Initial repository; defaults to the first configured entry. |
 | `DATABASE_PATH` | No | SQLite file; defaults to `./data/agent.db`. |
+| `DEFAULT_AGENT` | No | Agent used for new chats: `codex` or `claude`; defaults to `codex`. |
 | `CODEX_MODEL` | No | Explicit Codex model. Empty uses the local Codex default. |
 | `CODEX_PATH` | No | Codex CLI executable; defaults to `codex`. |
 | `CODEX_NETWORK_ACCESS` | No | Set to `true` to allow outbound network access for Codex turns; missing or invalid values fall back to `false`. |
-| `CODEX_ALLOW_SECRET_FILE_ACCESS` | No | Set to `true` to permit Codex to read secret files inside its sandbox when a task requires it. Defaults to `false`; any value other than `true` is treated as `false`. This is an instruction-level policy, not an OS-enforced per-file boundary. |
+| `CODEX_ALLOW_SECRET_FILE_ACCESS` | No | Set to `true` to permit Codex to read secret files inside its sandbox when a task requires it. Also applies to Claude, which receives the same policy as an appended system prompt. Claude also honours `permissions.allow` rules in a repository's own `.claude/settings.json` once you have trusted that folder in Claude Code, and those rules skip the Telegram approval prompt; review them in every allowlisted repository. Defaults to `false`; any value other than `true` is treated as `false`. This is an instruction-level policy, not an OS-enforced per-file boundary. |
 | `CODEX_SANDBOX_MODE` | No | Codex filesystem sandbox: `read-only`, `workspace-write`, or `danger-full-access`; missing or invalid values fall back to `read-only`. |
 | `CODEX_APPROVAL_POLICY` | No | Codex approval policy: `untrusted`, `on-request`, or `never`; missing or invalid values fall back to `untrusted`. |
+| `CLAUDE_PATH` | No | Claude Code CLI executable; defaults to `claude`. |
+| `CLAUDE_MODEL` | No | Claude model or alias. Empty uses the local Claude Code default. |
 | `TASK_TIMEOUT_MS` | No | Maximum turn duration; defaults to 30 minutes. |
 | `APPROVAL_TIMEOUT_MS` | No | Approval lifetime; defaults to 5 minutes, then rejects. |
 | `MAX_MESSAGE_LENGTH` | No | Maximum accepted prompt length; defaults to 12,000 characters. |
+| `MAX_DOCUMENT_BYTES` | No | Maximum Telegram document size accepted for a task; defaults to 10 MiB. Documents are temporarily stored under `.codex-agent/uploads` in the selected repository and removed after the task. |
 
 Repository keys may contain letters, numbers, `_`, and `-`. Every repository
 path must be absolute. Telegram users can select only keys present in this map.
@@ -318,14 +328,17 @@ same bot token; Telegram updates may be consumed by either process.
 
 | Command | Behavior |
 | --- | --- |
+| `/agent` | Shows the current agent and Codex/Claude selection buttons. |
+| `/agent codex` | Selects Codex and starts a fresh provider thread. |
+| `/agent claude` | Selects Claude and starts a fresh provider thread. |
 | `/repo` | Lists allowlisted repositories and shows the selected one. |
-| `/repo <name>` | Selects a repository and starts a fresh Codex thread. |
+| `/repo <name>` | Selects a repository and starts a fresh agent thread. |
 | `/threads` | Lists recent threads for the selected repository with resume buttons. |
 | `/new` | Clears the saved thread for a fresh conversation. |
 | `/status` | Shows the current repository and active task state. |
-| `/cancel` | Requests cancellation of the active Codex turn. |
+| `/cancel` | Requests cancellation of the active agent turn. |
 | `/help` | Displays command help. |
-| Plain text | Runs the message as a Codex task. |
+| Plain text | Runs the message with the selected agent. |
 
 While a task is running, meaningful progress updates are appended to the chat.
 Only the newest progress message includes a **✕ Cancel task** button, keeping
@@ -334,12 +347,15 @@ from the previous update before the next one is sent. Only the user who started
 the task can use it. The button requests the same cancellation as `/cancel` and
 disappears when the task ends.
 
-Thread IDs are stored in SQLite. Follow-up messages continue the same Codex
+Thread IDs are stored in SQLite. Follow-up messages continue the same agent
 conversation, including after a service restart, until `/new` is used or the
-repository is changed. `/threads` queries Codex's local history, filters it to
+repository or agent is changed. `/threads` queries Codex's local history, filters it to
 the selected repository, and displays up to ten recent threads. Only the user
 who requested that list may select one, and its buttons expire after the
 configured approval timeout.
+Claude sessions resume automatically from the session ID stored for the chat,
+but Claude Code does not expose a machine-readable CLI session-list command,
+so `/threads` cannot browse arbitrary Claude sessions.
 
 ## Telegram Bot API limits
 
@@ -539,8 +555,9 @@ npm start             # run compiled application
 
 ## MVP limitations
 
-- Telegram text messages only; files, images, voice notes, and replies are not
-  passed to Codex.
+- Telegram text messages and document attachments are supported. Documents are
+  limited to 10 MiB by default and only common text, data, PDF, and Office
+  extensions are accepted. Images, voice notes, and replies are not passed to Codex.
 - Command and file-change approvals are supported; network access is configured
   globally for agent turns rather than granted per command.
 - One application process; active-task coordination is in memory.

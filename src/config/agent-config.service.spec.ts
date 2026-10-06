@@ -22,6 +22,26 @@ describe('AgentConfigService', () => {
     expect(service.codexAllowSecretFileAccess).toBe(false);
     expect(service.codexSandboxMode).toBe('read-only');
     expect(service.codexApprovalPolicy).toBe('untrusted');
+    expect(service.defaultAgent).toBe('codex');
+    expect(service.claudePath).toBe('claude');
+    expect(service.maxDocumentBytes).toBe(10_485_760);
+  });
+
+  it('configures Claude as the default agent', () => {
+    const service = new AgentConfigService(
+      config({
+        TELEGRAM_BOT_TOKEN: 'token',
+        TELEGRAM_ALLOWED_USER_IDS: '123',
+        REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+        DEFAULT_AGENT: 'claude',
+        CLAUDE_PATH: '/usr/local/bin/claude',
+        CLAUDE_MODEL: 'sonnet',
+      }),
+    );
+
+    expect(service.defaultAgent).toBe('claude');
+    expect(service.claudePath).toBe('/usr/local/bin/claude');
+    expect(service.claudeModel).toBe('sonnet');
   });
 
   it('enables Codex network access only when explicitly set to true', () => {

@@ -15,7 +15,7 @@ export type ApprovalDecision =
   | 'cancel';
 
 export interface ApprovalRequest {
-  type: 'command' | 'file-change';
+  type: 'command' | 'file-change' | 'tool';
   threadId: string;
   turnId: string;
   itemId: string;
@@ -430,10 +430,7 @@ class AppServerClient {
   }
 
   private secretFileInstructions(): string {
-    if (this.allowSecretFileAccess) {
-      return 'Secret-file access is enabled by the application owner. You may read secret files inside the active sandbox when required for the user\'s task. Never reproduce secret values in chat, progress updates, command output, logs, or committed files.';
-    }
-    return 'Security policy: do not read, print, summarize, copy, or expose .env files, credentials, private keys, tokens, or secret stores. Ask the user to perform secret-dependent operations manually.';
+    return secretFileInstructions(this.allowSecretFileAccess);
   }
 
   private sandboxPolicy(): Record<string, unknown> {
@@ -503,4 +500,11 @@ class AppServerClient {
     const oneLine = value.replace(/\s+/g, ' ').trim();
     return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
   }
+}
+
+export function secretFileInstructions(allowSecretFileAccess: boolean): string {
+  if (allowSecretFileAccess) {
+    return 'Secret-file access is enabled by the application owner. You may read secret files inside the active sandbox when required for the user\'s task. Never reproduce secret values in chat, progress updates, command output, logs, or committed files.';
+  }
+  return 'Security policy: do not read, print, summarize, copy, or expose .env files, credentials, private keys, tokens, or secret stores. Ask the user to perform secret-dependent operations manually.';
 }

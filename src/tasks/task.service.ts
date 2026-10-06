@@ -2,10 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { AgentConfigService } from '../config/agent-config.service';
 import {
   ApprovalHandler,
-  CodexService,
   ProgressHandler,
 } from '../codex/codex.service';
 import { DatabaseService } from '../database/database.service';
+import { AgentProvider } from '../config/agent-config.service';
+import { AgentService } from '../agent/agent.service';
 
 interface ActiveTask {
   abortController: AbortController;
@@ -16,6 +17,7 @@ interface ActiveTask {
 export interface TaskStatus {
   running: boolean;
   repositoryKey: string;
+  provider: AgentProvider;
   elapsedSeconds?: number;
 }
 
@@ -26,14 +28,22 @@ export class TaskService {
   constructor(
     private readonly config: AgentConfigService,
     private readonly database: DatabaseService,
-    private readonly codex: CodexService,
+    private readonly agents: AgentService,
   ) {}
 
   session(chatId: number) {
     return this.database.getOrCreateSession(
       chatId,
       this.config.defaultRepository,
+      this.config.defaultAgent,
     );
+  }
+
+  selectAgent(chatId: number, provider: AgentProvider): boolean {
+    if (this.active.has(chatId)) return false;
+    this.session(chatId);
+    this.database.selectProvider(chatId, provider);
+    return true;
   }
 
   selectRepository(chatId: number, key: string): boolean {
@@ -50,10 +60,18 @@ export class TaskService {
     return true;
   }
 
-  resumeThread(chatId: number, repositoryKey: string, threadId: string): boolean {
+  resumeThread(
+    chatId: number,
+    repositoryKey: string,
+    provider: AgentProvider,
+    threadId: string,
+  ): boolean {
     if (this.active.has(chatId)) return false;
     const session = this.session(chatId);
-    if (session.repositoryKey !== repositoryKey) return false;
+    if (
+      session.repositoryKey !== repositoryKey ||
+      session.provider !== provider
+    ) return false;
     this.database.saveThread(chatId, threadId);
     return true;
   }
@@ -65,9 +83,21 @@ export class TaskService {
       ? {
           running: true,
           repositoryKey: active.repositoryKey,
+          provider: session.provider,
           elapsedSeconds: Math.floor((Date.now() - active.startedAt) / 1000),
         }
-      : { running: false, repositoryKey: session.repositoryKey };
+      : {
+          running: false,
+          repositoryKey: session.repositoryKey,
+          provider: session.provider,
+        };
+  }
+
+  listThreads(chatId: number, limit = 10) {
+    const session = this.session(chatId);
+    const repository = this.config.repository(session.repositoryKey);
+    if (!repository) throw new Error('The selected repository is no longer configured.');
+    return this.agents.listThreads(session.provider, repository, limit);
   }
 
   cancel(chatId: number): boolean {
@@ -106,11 +136,17 @@ export class TaskService {
       () => abortController.abort(),
       this.config.taskTimeoutMs,
     );
-    const auditId = this.database.startAudit(chatId, repository.key, prompt);
+    const auditId = this.database.startAudit(
+      chatId,
+      repository.key,
+      session.provider,
+      prompt,
+    );
 
     try {
       const run = (threadId: string | null) =>
-        this.codex.run(
+        this.agents.run(
+          session.provider,
           repository,
           prompt,
           threadId,
@@ -126,7 +162,7 @@ export class TaskService {
         if (
           !session.threadId ||
           abortController.signal.aborted ||
-          !this.isMissingRolloutError(error)
+          !this.isMissingThreadError(error)
         ) {
           throw error;
         }
@@ -137,7 +173,7 @@ export class TaskService {
         } catch (retryError) {
           if (
             abortController.signal.aborted ||
-            !this.isMissingRolloutError(retryError)
+            !this.isMissingThreadError(retryError)
           ) {
             throw retryError;
           }
@@ -155,7 +191,7 @@ export class TaskService {
         ? 'Task cancelled or timed out.'
         : error instanceof Error
           ? error.message
-          : 'Unknown Codex error';
+          : 'Unknown agent error';
       this.database.finishAudit(auditId, aborted ? 'cancelled' : 'failed', message);
       throw new Error(message, { cause: error });
     } finally {
@@ -164,10 +200,11 @@ export class TaskService {
     }
   }
 
-  private isMissingRolloutError(error: unknown): boolean {
+  private isMissingThreadError(error: unknown): boolean {
     return (
       error instanceof Error &&
-      /no rollout found for thread id\b/i.test(error.message)
+      (/no rollout found for thread id\b/i.test(error.message) ||
+        /no conversation found with session id\b/i.test(error.message))
     );
   }
 }

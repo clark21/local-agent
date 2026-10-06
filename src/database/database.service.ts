@@ -4,11 +4,13 @@ import Database = require('better-sqlite3');
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { AgentConfigService } from '../config/agent-config.service';
+import { AgentProvider } from '../config/agent-config.service';
 
 export interface ChatSession {
   chatId: number;
   repositoryKey: string;
   threadId: string | null;
+  provider: AgentProvider;
 }
 
 @Injectable()
@@ -46,33 +48,65 @@ export class DatabaseService implements OnModuleDestroy {
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    // Rows that predate Claude support were all Codex.
+    this.addColumnIfMissing('chat_sessions', 'provider', "TEXT NOT NULL DEFAULT 'codex'");
+    this.addColumnIfMissing('task_audit', 'provider', "TEXT NOT NULL DEFAULT 'codex'");
   }
 
-  getOrCreateSession(chatId: number, defaultRepository: string): ChatSession {
+  private addColumnIfMissing(table: string, column: string, definition: string): void {
+    const columns = this.database
+      .prepare(`PRAGMA table_info(${table})`)
+      .all() as Array<{ name: string }>;
+    if (!columns.some((existing) => existing.name === column)) {
+      this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+
+  getOrCreateSession(
+    chatId: number,
+    defaultRepository: string,
+    defaultProvider: AgentProvider,
+  ): ChatSession {
     this.database
       .prepare(
-        `INSERT INTO chat_sessions (chat_id, repository_key)
-         VALUES (?, ?) ON CONFLICT(chat_id) DO NOTHING`,
+        `INSERT INTO chat_sessions (chat_id, repository_key, provider)
+         VALUES (?, ?, ?) ON CONFLICT(chat_id) DO NOTHING`,
       )
-      .run(chatId, defaultRepository);
+      .run(chatId, defaultRepository, defaultProvider);
     return this.getSession(chatId)!;
   }
 
   getSession(chatId: number): ChatSession | undefined {
     const row = this.database
       .prepare(
-        'SELECT chat_id, repository_key, thread_id FROM chat_sessions WHERE chat_id = ?',
+        'SELECT chat_id, repository_key, thread_id, provider FROM chat_sessions WHERE chat_id = ?',
       )
       .get(chatId) as
-      | { chat_id: number; repository_key: string; thread_id: string | null }
+      | {
+          chat_id: number;
+          repository_key: string;
+          thread_id: string | null;
+          provider: AgentProvider;
+        }
       | undefined;
     return row
       ? {
           chatId: row.chat_id,
           repositoryKey: row.repository_key,
           threadId: row.thread_id,
+          provider: row.provider,
         }
       : undefined;
+  }
+
+  selectProvider(chatId: number, provider: AgentProvider): void {
+    this.database
+      .prepare(
+        `UPDATE chat_sessions
+         SET provider = ?, thread_id = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE chat_id = ?`,
+      )
+      .run(provider, chatId);
   }
 
   selectRepository(chatId: number, repositoryKey: string): void {
@@ -103,14 +137,19 @@ export class DatabaseService implements OnModuleDestroy {
       .run(chatId);
   }
 
-  startAudit(chatId: number, repositoryKey: string, prompt: string): number {
+  startAudit(
+    chatId: number,
+    repositoryKey: string,
+    provider: AgentProvider,
+    prompt: string,
+  ): number {
     return Number(
       this.database
         .prepare(
-          `INSERT INTO task_audit (chat_id, repository_key, prompt, status)
-           VALUES (?, ?, ?, 'running')`,
+          `INSERT INTO task_audit (chat_id, repository_key, provider, prompt, status)
+           VALUES (?, ?, ?, ?, 'running')`,
         )
-        .run(chatId, repositoryKey, prompt).lastInsertRowid,
+        .run(chatId, repositoryKey, provider, prompt).lastInsertRowid,
     );
   }
 
