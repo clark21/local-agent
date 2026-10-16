@@ -213,6 +213,9 @@ TASK_TIMEOUT_MS=1800000
 APPROVAL_TIMEOUT_MS=300000
 MAX_MESSAGE_LENGTH=12000
 MAX_DOCUMENT_BYTES=10485760
+JIRA_BASE_URL=
+JIRA_EMAIL=
+JIRA_API_TOKEN=
 ```
 
 ### Environment variable reference
@@ -237,6 +240,9 @@ MAX_DOCUMENT_BYTES=10485760
 | `APPROVAL_TIMEOUT_MS` | No | Approval lifetime; defaults to 5 minutes, then rejects. |
 | `MAX_MESSAGE_LENGTH` | No | Maximum accepted prompt length; defaults to 12,000 characters. |
 | `MAX_DOCUMENT_BYTES` | No | Maximum Telegram document size accepted for a task; defaults to 10 MiB. Documents are temporarily stored under `.codex-agent/uploads` in the selected repository and removed after the task. |
+| `JIRA_BASE_URL` | No | Jira Cloud site, for example `https://acme.atlassian.net`. Must use `https`. Set all three `JIRA_*` variables to enable `/jira`, or none to disable it. |
+| `JIRA_EMAIL` | No | Atlassian account email used for Jira API requests. |
+| `JIRA_API_TOKEN` | No | Atlassian API token for that account. Stays in the bot process; Codex and Claude never receive it. |
 
 Repository keys may contain letters, numbers, `_`, and `-`. Every repository
 path must be absolute. Telegram users can select only keys present in this map.
@@ -335,6 +341,11 @@ same bot token; Telegram updates may be consumed by either process.
 | `/repo <name>` | Selects a repository and starts a fresh agent thread. |
 | `/threads` | Lists recent threads for the selected repository with resume buttons. |
 | `/new` | Clears the saved thread for a fresh conversation. |
+| `/jira` | Lists open Jira tickets (any project or assignee), newest first. |
+| `/jira <KEY-123>` | Shows a ticket with a **▶ Work on this** button. |
+| `/jira <PROJECT>` | Lists a project's open tickets, e.g. `/jira API`. |
+| `/jira <JQL>` | Runs a JQL query, e.g. `/jira project = API AND status = "To Do"`. |
+| `/jira <text>` | Searches ticket text, e.g. `/jira login timeout`. |
 | `/status` | Shows the current repository and active task state. |
 | `/cancel` | Requests cancellation of the active agent turn. |
 | `/help` | Displays command help. |
@@ -356,6 +367,29 @@ configured approval timeout.
 Claude sessions resume automatically from the session ID stored for the chat,
 but Claude Code does not expose a machine-readable CLI session-list command,
 so `/threads` cannot browse arbitrary Claude sessions.
+
+## Working on Jira tickets
+
+Jira Cloud integration is read-only: the bot fetches tickets but never edits,
+comments on, or transitions them. Create an API token at
+<https://id.atlassian.com/manage-profile/security/api-tokens> and set the three
+`JIRA_*` variables.
+
+1. Find a ticket with `/jira`, `/jira <PROJECT>`, JQL, or a text search. Lists
+   show ten tickets at a time with a **Next page ▸** button.
+2. Select a ticket to see its status, description, and latest comments.
+3. Press **▶ Work on this** and tick one or more repositories. The first
+   repository selected (★) is the main one and the agent's working directory;
+   the others (✓) are added to the agent's workspace. Codex may write to all of
+   them, and Claude receives them through `--add-dir`.
+4. Press **▶ Implement** or **📝 Plan only**. Either starts a fresh thread with
+   the selected agent, using the ticket's details, description, and five latest
+   comments as the prompt. Long tickets are truncated to fit
+   `MAX_MESSAGE_LENGTH`.
+
+Follow-up messages continue the same thread in the same set of repositories.
+`/repo <name>` returns to a single repository. Ticket buttons expire after 30
+minutes and only work for the user who opened the list.
 
 ## Telegram Bot API limits
 
@@ -529,8 +563,9 @@ Only the Telegram user who initiated that task can answer its prompt.
 
 ### A task cannot access another directory
 
-This is expected unless the directory is inside the selected repository. Add a
-new, narrowly scoped repository entry only after reviewing the security impact.
+This is expected unless the directory is inside the selected repository, or in
+another repository added to the workspace from a Jira ticket. Add a new,
+narrowly scoped repository entry only after reviewing the security impact.
 
 ### `/cancel` takes time
 

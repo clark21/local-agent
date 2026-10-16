@@ -19,6 +19,11 @@ while IFS= read -r line; do
       ;;
     *'"method":"turn/start"'*)
       case "$line" in
+        *'"writableRoots":["/tmp","/tmp/web"]'*)
+          printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-test"}}}'
+          printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-test","turnId":"turn-test","item":{"type":"agentMessage","id":"answer","text":"multi"}}}'
+          printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-test","turn":{"id":"turn-test","status":"completed","error":null}}}'
+          ;;
         *'"approvalPolicy":"on-request"'*'"sandboxPolicy":{"type":"workspaceWrite"'*)
           printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-test"}}}'
           printf '%s\n' '{"id":900,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-test","turnId":"turn-test","itemId":"item-test","command":"npm test","cwd":"/tmp"}}'

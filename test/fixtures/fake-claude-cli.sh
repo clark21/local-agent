@@ -39,6 +39,16 @@ case "$resume" in
     printf '%s\n' "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"session_id\":\"$resume\",\"errors\":[\"No conversation found with session ID: $resume\"]}"
     exit 1
     ;;
+  multi-repo)
+    read -r _prompt
+    if [[ "$args" != *" --add-dir /tmp/web /tmp/docs "* ]]; then
+      echo 'Error: additional repositories were not passed with --add-dir' >&2
+      exit 1
+    fi
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-session","result":"multi"}'
+    cat >/dev/null
+    exit 0
+    ;;
   webfetch)
     read -r _prompt
     printf '%s\n' '{"type":"system","subtype":"init","session_id":"claude-session"}'
