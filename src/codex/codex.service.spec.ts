@@ -29,6 +29,29 @@ describe('CodexService app-server integration', () => {
     expect(result).toEqual({ response: 'completed', threadId: 'thread-test' });
   });
 
+  it('lets the turn write to every workspace repository', async () => {
+    const service = new CodexService({
+      codexPath: resolve('test/fixtures/fake-app-server.sh'),
+      codexModel: undefined,
+      codexApprovalPolicy: 'on-request',
+      codexSandboxMode: 'workspace-write',
+      codexNetworkAccess: false,
+      codexAllowSecretFileAccess: false,
+    } as never);
+
+    await expect(
+      service.run(
+        { key: 'test', path: '/tmp' },
+        'run tests',
+        null,
+        new AbortController().signal,
+        () => Promise.resolve(),
+        () => Promise.resolve('decline'),
+        [{ key: 'web', path: '/tmp/web' }],
+      ),
+    ).resolves.toEqual({ response: 'multi', threadId: 'thread-test' });
+  });
+
   it('lists threads for a repository', async () => {
     const service = new CodexService({
       codexPath: resolve('test/fixtures/fake-app-server.sh'),

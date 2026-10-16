@@ -5,7 +5,7 @@ import {
   ProgressHandler,
 } from '../codex/codex.service';
 import { DatabaseService } from '../database/database.service';
-import { AgentProvider } from '../config/agent-config.service';
+import { AgentProvider, RepositoryConfig } from '../config/agent-config.service';
 import { AgentService } from '../agent/agent.service';
 
 interface ActiveTask {
@@ -17,6 +17,7 @@ interface ActiveTask {
 export interface TaskStatus {
   running: boolean;
   repositoryKey: string;
+  extraRepositoryKeys: string[];
   provider: AgentProvider;
   elapsedSeconds?: number;
 }
@@ -53,6 +54,25 @@ export class TaskService {
     return true;
   }
 
+  /**
+   * Selects a main repository plus additional ones the agent may work in, and
+   * starts a fresh thread. Keys must be distinct, configured repositories.
+   */
+  selectWorkspace(chatId: number, repositoryKeys: string[]): boolean {
+    const [main, ...extras] = repositoryKeys;
+    if (
+      this.active.has(chatId) ||
+      !main ||
+      new Set(repositoryKeys).size !== repositoryKeys.length ||
+      repositoryKeys.some((key) => !this.config.repository(key))
+    ) {
+      return false;
+    }
+    this.session(chatId);
+    this.database.selectWorkspace(chatId, main, extras);
+    return true;
+  }
+
   newThread(chatId: number): boolean {
     if (this.active.has(chatId)) return false;
     this.session(chatId);
@@ -79,16 +99,19 @@ export class TaskService {
   status(chatId: number): TaskStatus {
     const session = this.session(chatId);
     const active = this.active.get(chatId);
+    // The workspace cannot change while a task runs, so the session is current.
     return active
       ? {
           running: true,
           repositoryKey: active.repositoryKey,
+          extraRepositoryKeys: session.extraRepositoryKeys,
           provider: session.provider,
           elapsedSeconds: Math.floor((Date.now() - active.startedAt) / 1000),
         }
       : {
           running: false,
           repositoryKey: session.repositoryKey,
+          extraRepositoryKeys: session.extraRepositoryKeys,
           provider: session.provider,
         };
   }
@@ -125,6 +148,14 @@ export class TaskService {
     const session = this.session(chatId);
     const repository = this.config.repository(session.repositoryKey);
     if (!repository) throw new Error('The selected repository is no longer configured.');
+    const additionalRepositories = session.extraRepositoryKeys.map((key) => {
+      const extra = this.config.repository(key);
+      if (!extra) throw new Error(`Repository ${key} is no longer configured.`);
+      return extra;
+    });
+    const agentPrompt = additionalRepositories.length
+      ? `${this.workspaceNote(repository, additionalRepositories)}\n\n${prompt}`
+      : prompt;
 
     const abortController = new AbortController();
     this.active.set(chatId, {
@@ -148,11 +179,12 @@ export class TaskService {
         this.agents.run(
           session.provider,
           repository,
-          prompt,
+          agentPrompt,
           threadId,
           abortController.signal,
           onProgress,
           onApproval,
+          additionalRepositories,
         );
 
       let result;
@@ -198,6 +230,14 @@ export class TaskService {
       clearTimeout(timeout);
       this.active.delete(chatId);
     }
+  }
+
+  private workspaceNote(
+    main: RepositoryConfig,
+    additional: RepositoryConfig[],
+  ): string {
+    const extras = additional.map((repo) => `- ${repo.key}: ${repo.path}`).join('\n');
+    return `This task spans multiple repositories. You may read and modify files in all of them.\nMain repository (current working directory): ${main.key}: ${main.path}\nAdditional repositories:\n${extras}`;
   }
 
   private isMissingThreadError(error: unknown): boolean {

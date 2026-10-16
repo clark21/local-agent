@@ -14,6 +14,12 @@ export type CodexSandboxMode =
 export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never';
 export type AgentProvider = 'codex' | 'claude';
 
+export interface JiraConfig {
+  baseUrl: string;
+  email: string;
+  apiToken: string;
+}
+
 @Injectable()
 export class AgentConfigService {
   readonly telegramToken: string;
@@ -34,6 +40,7 @@ export class AgentConfigService {
   readonly approvalTimeoutMs: number;
   readonly maxMessageLength: number;
   readonly maxDocumentBytes: number;
+  readonly jira?: JiraConfig;
 
   constructor(config: ConfigService) {
     this.telegramToken = this.required(config, 'TELEGRAM_BOT_TOKEN');
@@ -97,6 +104,7 @@ export class AgentConfigService {
       config.get<string>('APPROVAL_TIMEOUT_MS') ?? '300000',
       'APPROVAL_TIMEOUT_MS',
     );
+    this.jira = this.parseJira(config);
   }
 
   repository(key: string): RepositoryConfig | undefined {
@@ -144,6 +152,27 @@ export class AgentConfigService {
       repositories.set(key, resolve(path));
     }
     return repositories;
+  }
+
+  // Jira is optional, but a partial configuration is almost certainly a mistake.
+  private parseJira(config: ConfigService): JiraConfig | undefined {
+    const baseUrl = config.get<string>('JIRA_BASE_URL')?.trim();
+    const email = config.get<string>('JIRA_EMAIL')?.trim();
+    const apiToken = config.get<string>('JIRA_API_TOKEN')?.trim();
+    if (!baseUrl && !email && !apiToken) return undefined;
+    if (!baseUrl || !email || !apiToken) {
+      throw new Error(
+        'JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN must all be set to enable Jira',
+      );
+    }
+    let url: URL;
+    try {
+      url = new URL(baseUrl);
+    } catch {
+      throw new Error('JIRA_BASE_URL must be a valid URL');
+    }
+    if (url.protocol !== 'https:') throw new Error('JIRA_BASE_URL must use https');
+    return { baseUrl: url.origin, email, apiToken };
   }
 
   private positiveInteger(value: string, key: string): number {

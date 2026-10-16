@@ -7,6 +7,7 @@ import { TaskService } from './tasks/task.service';
 import { TelegramService } from './telegram/telegram.service';
 import { ClaudeService } from './claude/claude.service';
 import { AgentService } from './agent/agent.service';
+import { JiraService } from './jira/jira.service';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true })],
@@ -16,6 +17,7 @@ import { AgentService } from './agent/agent.service';
     CodexService,
     ClaudeService,
     AgentService,
+    JiraService,
     TaskService,
     TelegramService,
   ],

@@ -53,6 +53,23 @@ describe('ClaudeService CLI integration', () => {
     expect(requests[0].reason).toContain('https://example.com');
   });
 
+  it('grants access to additional workspace repositories', async () => {
+    await expect(
+      service.run(
+        { key: 'test', path: '/tmp' },
+        'run tests',
+        'multi-repo',
+        new AbortController().signal,
+        () => Promise.resolve(),
+        () => Promise.resolve('decline'),
+        [
+          { key: 'web', path: '/tmp/web' },
+          { key: 'docs', path: '/tmp/docs' },
+        ],
+      ),
+    ).resolves.toEqual({ response: 'multi', threadId: 'claude-session' });
+  });
+
   it('reports a missing session so the task can start a new thread', async () => {
     await expect(run('missing-session')).rejects.toThrow(
       'No conversation found with session ID: missing-session',

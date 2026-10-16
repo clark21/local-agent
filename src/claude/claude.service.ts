@@ -38,12 +38,14 @@ export class ClaudeService {
     signal: AbortSignal,
     onProgress: ProgressHandler,
     onApproval: ApprovalHandler,
+    additionalRepositories: RepositoryConfig[] = [],
   ): Promise<CodexRunResult> {
     const client = new ClaudeCliClient(
       this.config.claudePath,
       this.config.claudeModel,
       this.config.codexAllowSecretFileAccess,
       repository,
+      additionalRepositories,
       onProgress,
       onApproval,
       this.logger,
@@ -76,6 +78,7 @@ class ClaudeCliClient {
     private readonly model: string | undefined,
     private readonly allowSecretFileAccess: boolean,
     private readonly repository: RepositoryConfig,
+    private readonly additionalRepositories: RepositoryConfig[],
     private readonly onProgress: ProgressHandler,
     private readonly onApproval: ApprovalHandler,
     private readonly logger: Logger,
@@ -104,6 +107,9 @@ class ClaudeCliClient {
       '--append-system-prompt',
       secretFileInstructions(this.allowSecretFileAccess),
     ];
+    if (this.additionalRepositories.length) {
+      args.push('--add-dir', ...this.additionalRepositories.map((repository) => repository.path));
+    }
     if (this.model) args.push('--model', this.model);
     if (existingThreadId) args.push('--resume', existingThreadId);
 

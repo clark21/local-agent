@@ -11,6 +11,8 @@ export interface ChatSession {
   repositoryKey: string;
   threadId: string | null;
   provider: AgentProvider;
+  /** Repositories the agent may also work in, besides `repositoryKey`. */
+  extraRepositoryKeys: string[];
 }
 
 @Injectable()
@@ -51,6 +53,11 @@ export class DatabaseService implements OnModuleDestroy {
     // Rows that predate Claude support were all Codex.
     this.addColumnIfMissing('chat_sessions', 'provider', "TEXT NOT NULL DEFAULT 'codex'");
     this.addColumnIfMissing('task_audit', 'provider', "TEXT NOT NULL DEFAULT 'codex'");
+    this.addColumnIfMissing(
+      'chat_sessions',
+      'extra_repository_keys',
+      "TEXT NOT NULL DEFAULT '[]'",
+    );
   }
 
   private addColumnIfMissing(table: string, column: string, definition: string): void {
@@ -79,7 +86,8 @@ export class DatabaseService implements OnModuleDestroy {
   getSession(chatId: number): ChatSession | undefined {
     const row = this.database
       .prepare(
-        'SELECT chat_id, repository_key, thread_id, provider FROM chat_sessions WHERE chat_id = ?',
+        `SELECT chat_id, repository_key, thread_id, provider, extra_repository_keys
+         FROM chat_sessions WHERE chat_id = ?`,
       )
       .get(chatId) as
       | {
@@ -87,6 +95,7 @@ export class DatabaseService implements OnModuleDestroy {
           repository_key: string;
           thread_id: string | null;
           provider: AgentProvider;
+          extra_repository_keys: string;
         }
       | undefined;
     return row
@@ -95,8 +104,36 @@ export class DatabaseService implements OnModuleDestroy {
           repositoryKey: row.repository_key,
           threadId: row.thread_id,
           provider: row.provider,
+          extraRepositoryKeys: this.parseKeys(row.extra_repository_keys),
         }
       : undefined;
+  }
+
+  /** Selects a multi-repository workspace and starts a fresh thread. */
+  selectWorkspace(
+    chatId: number,
+    repositoryKey: string,
+    extraRepositoryKeys: string[],
+  ): void {
+    this.database
+      .prepare(
+        `UPDATE chat_sessions
+         SET repository_key = ?, extra_repository_keys = ?, thread_id = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE chat_id = ?`,
+      )
+      .run(repositoryKey, JSON.stringify(extraRepositoryKeys), chatId);
+  }
+
+  private parseKeys(value: string): string[] {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed)
+        ? parsed.filter((key): key is string => typeof key === 'string')
+        : [];
+    } catch {
+      return [];
+    }
   }
 
   selectProvider(chatId: number, provider: AgentProvider): void {
@@ -113,7 +150,8 @@ export class DatabaseService implements OnModuleDestroy {
     this.database
       .prepare(
         `UPDATE chat_sessions
-         SET repository_key = ?, thread_id = NULL, updated_at = CURRENT_TIMESTAMP
+         SET repository_key = ?, extra_repository_keys = '[]', thread_id = NULL,
+             updated_at = CURRENT_TIMESTAMP
          WHERE chat_id = ?`,
       )
       .run(repositoryKey, chatId);

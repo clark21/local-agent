@@ -24,6 +24,7 @@ export class AgentService {
     signal: AbortSignal,
     onProgress: ProgressHandler,
     onApproval: ApprovalHandler,
+    additionalRepositories: RepositoryConfig[] = [],
   ): Promise<CodexRunResult> {
     return provider === 'claude'
       ? this.claude.run(
@@ -33,6 +34,7 @@ export class AgentService {
           signal,
           onProgress,
           onApproval,
+          additionalRepositories,
         )
       : this.codex.run(
           repository,
@@ -41,6 +43,7 @@ export class AgentService {
           signal,
           onProgress,
           onApproval,
+          additionalRepositories,
         );
   }
 

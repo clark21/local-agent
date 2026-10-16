@@ -13,6 +13,12 @@ describe('TaskService', () => {
     repositoryKey: 'app',
     threadId: null,
     provider: 'codex' as const,
+    extraRepositoryKeys: [] as string[],
+  };
+  const workspaceConfig = {
+    ...config,
+    repository: (key: string) =>
+      ['app', 'web'].includes(key) ? { key, path: `/tmp/${key}` } : undefined,
   };
   let database: {
     getOrCreateSession: jest.Mock;
@@ -22,6 +28,7 @@ describe('TaskService', () => {
     clearThread: jest.Mock;
     selectRepository: jest.Mock;
     selectProvider: jest.Mock;
+    selectWorkspace: jest.Mock;
   };
 
   beforeEach(() => {
@@ -33,6 +40,7 @@ describe('TaskService', () => {
       clearThread: jest.fn(),
       selectRepository: jest.fn(),
       selectProvider: jest.fn(),
+      selectWorkspace: jest.fn(),
     };
   });
 
@@ -91,6 +99,7 @@ describe('TaskService', () => {
       expect.anything(),
       progress,
       expect.anything(),
+      [],
     );
     expect(codex.run).toHaveBeenNthCalledWith(
       2,
@@ -101,6 +110,7 @@ describe('TaskService', () => {
       expect.anything(),
       progress,
       expect.anything(),
+      [],
     );
     expect(codex.run).toHaveBeenNthCalledWith(
       3,
@@ -111,6 +121,7 @@ describe('TaskService', () => {
       expect.anything(),
       progress,
       expect.anything(),
+      [],
     );
     expect(progress).toHaveBeenNthCalledWith(
       1,
@@ -164,9 +175,56 @@ describe('TaskService', () => {
       expect.anything(),
       expect.anything(),
       expect.anything(),
+      [],
     );
     expect(database.saveThread).toHaveBeenCalledWith(1, 'session-new');
     expect(database.startAudit).toHaveBeenCalledWith(1, 'app', 'claude', 'fix it');
+  });
+
+  it('runs in every workspace repository and tells the agent about them', async () => {
+    const agents = {
+      run: jest.fn().mockResolvedValue({ response: 'done', threadId: 'thread-1' }),
+    };
+    database.getOrCreateSession.mockReturnValue({
+      ...session,
+      extraRepositoryKeys: ['web'],
+    });
+    const service = new TaskService(
+      workspaceConfig as never,
+      database as never,
+      agents as never,
+    );
+
+    await service.execute(
+      1,
+      'fix it',
+      () => Promise.resolve(),
+      () => Promise.resolve('decline'),
+    );
+
+    const [, , prompt, , , , , additional] = agents.run.mock.calls[0] as unknown[];
+    expect(additional).toEqual([{ key: 'web', path: '/tmp/web' }]);
+    expect(prompt).toContain('Main repository (current working directory): app: /tmp/app');
+    expect(prompt).toContain('- web: /tmp/web');
+    expect(prompt).toMatch(/\n\nfix it$/);
+    // The audit keeps what the user asked for, not the workspace preamble.
+    expect(database.startAudit).toHaveBeenCalledWith(1, 'app', 'codex', 'fix it');
+  });
+
+  it('selects a workspace only from distinct, configured repositories', () => {
+    const service = new TaskService(
+      workspaceConfig as never,
+      database as never,
+      { run: jest.fn() } as never,
+    );
+
+    expect(service.selectWorkspace(1, [])).toBe(false);
+    expect(service.selectWorkspace(1, ['app', 'app'])).toBe(false);
+    expect(service.selectWorkspace(1, ['app', 'missing'])).toBe(false);
+    expect(database.selectWorkspace).not.toHaveBeenCalled();
+
+    expect(service.selectWorkspace(1, ['web', 'app'])).toBe(true);
+    expect(database.selectWorkspace).toHaveBeenCalledWith(1, 'web', ['app']);
   });
 
   it('switches providers and starts a fresh provider thread', () => {

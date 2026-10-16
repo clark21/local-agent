@@ -135,6 +135,52 @@ describe('AgentConfigService', () => {
     ).toThrow('must use an absolute path');
   });
 
+  describe('Jira', () => {
+    const base = {
+      TELEGRAM_BOT_TOKEN: 'token',
+      TELEGRAM_ALLOWED_USER_IDS: '123',
+      REPOSITORIES_JSON: '{"app":"/tmp/app"}',
+    };
+
+    it('is disabled when no Jira settings are present', () => {
+      expect(new AgentConfigService(config(base)).jira).toBeUndefined();
+    });
+
+    it('normalizes the site URL to its origin', () => {
+      const service = new AgentConfigService(
+        config({
+          ...base,
+          JIRA_BASE_URL: 'https://acme.atlassian.net/jira/',
+          JIRA_EMAIL: 'me@acme.test',
+          JIRA_API_TOKEN: 'secret',
+        }),
+      );
+
+      expect(service.jira).toEqual({
+        baseUrl: 'https://acme.atlassian.net',
+        email: 'me@acme.test',
+        apiToken: 'secret',
+      });
+    });
+
+    it('rejects partial or insecure settings', () => {
+      expect(
+        () => new AgentConfigService(config({ ...base, JIRA_BASE_URL: 'https://acme.atlassian.net' })),
+      ).toThrow('must all be set');
+      expect(
+        () =>
+          new AgentConfigService(
+            config({
+              ...base,
+              JIRA_BASE_URL: 'http://acme.atlassian.net',
+              JIRA_EMAIL: 'me@acme.test',
+              JIRA_API_TOKEN: 'secret',
+            }),
+          ),
+      ).toThrow('must use https');
+    });
+  });
+
   it('rejects a default repository that is not allowlisted', () => {
     expect(
       () =>

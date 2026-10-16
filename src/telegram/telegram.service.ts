@@ -10,7 +10,9 @@ import {
 import { AgentProvider } from '../config/agent-config.service';
 import { AgentConfigService } from '../config/agent-config.service';
 import { DatabaseService } from '../database/database.service';
+import { JiraService, JiraWorkMode, parseJiraQuery } from '../jira/jira.service';
 import { TaskService } from '../tasks/task.service';
+import { PendingStore } from './pending-store';
 
 const HELP = `Local coding agent commands:
 /agent - show or select Codex/Claude
@@ -18,6 +20,8 @@ const HELP = `Local coding agent commands:
 /repo - list repositories
 /repo <name> - select a repository and start a fresh thread
 /threads - list and resume recent threads for the current repository
+/jira - list open Jira tickets
+/jira <KEY-123 | PROJECT | JQL | text> - open a ticket or search tickets
 /new - start a fresh thread in the current repository
 /status - show current repository and task status
 /cancel - cancel the active task
@@ -39,6 +43,21 @@ interface PendingApproval {
   timer: NodeJS.Timeout;
 }
 
+// Ticket browsing takes longer than approving a command, so allow more time.
+const JIRA_SELECTION_TTL_MS = 30 * 60_000;
+
+type PendingJira =
+  | { kind: 'page'; chatId: number; userId: number; jql: string; nextPageToken: string }
+  | { kind: 'issue'; chatId: number; userId: number; issueKey: string }
+  | {
+      kind: 'workspace';
+      chatId: number;
+      userId: number;
+      issueKey: string;
+      /** Selected repositories in selection order; the first is the main one. */
+      repositoryKeys: string[];
+    };
+
 interface PendingThreadSelection {
   chatId: number;
   userId: number;
@@ -57,11 +76,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     string,
     PendingThreadSelection
   >();
+  private readonly pendingJira = new PendingStore<PendingJira>(JIRA_SELECTION_TTL_MS);
 
   constructor(
     private readonly config: AgentConfigService,
     private readonly tasks: TaskService,
     private readonly database: DatabaseService,
+    private readonly jira: JiraService,
   ) {
     this.bot = new Telegraf(config.telegramToken);
     this.registerHandlers();
@@ -72,6 +93,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       { command: 'repo', description: 'List or select a repository' },
       { command: 'agent', description: 'Show or select Codex/Claude' },
       { command: 'threads', description: 'List and resume recent threads' },
+      { command: 'jira', description: 'List, search, or open Jira tickets' },
       { command: 'new', description: 'Start a fresh agent thread' },
       { command: 'status', description: 'Show task status' },
       { command: 'cancel', description: 'Cancel the active task' },
@@ -89,6 +111,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       clearTimeout(selection.timer);
     }
     this.pendingThreadSelections.clear();
+    this.pendingJira.clear();
     this.bot.stop('application shutdown');
   }
 
@@ -153,9 +176,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.command('repo', async (ctx) => {
       const requested = ctx.message.text.replace(/^\/repo(?:@\w+)?\s*/i, '').trim();
       if (!requested) {
-        const current = this.tasks.session(ctx.chat.id).repositoryKey;
+        const session = this.tasks.session(ctx.chat.id);
         const list = [...this.config.repositories.keys()]
-          .map((key) => `${key === current ? '•' : '◦'} ${key}`)
+          .map((key) => {
+            const mark =
+              key === session.repositoryKey
+                ? '•'
+                : session.extraRepositoryKeys.includes(key)
+                  ? '+'
+                  : '◦';
+            return `${mark} ${key}`;
+          })
           .join('\n');
         await ctx.reply(`Repositories:\n${list}\n\nUse /repo <name> to select one.`);
         return;
@@ -247,10 +278,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     this.bot.command('status', async (ctx) => {
       const status = this.tasks.status(ctx.chat.id);
+      const workspace = this.workspaceLabel([
+        status.repositoryKey,
+        ...status.extraRepositoryKeys,
+      ]);
       await ctx.reply(
         status.running
-          ? `${this.agentName(status.provider)} running in ${status.repositoryKey} for ${status.elapsedSeconds}s.`
-          : `Idle. Agent: ${this.agentName(status.provider)}. Repository: ${status.repositoryKey}.`,
+          ? `${this.agentName(status.provider)} running in ${workspace} for ${status.elapsedSeconds}s.`
+          : `Idle. Agent: ${this.agentName(status.provider)}. Repository: ${workspace}.`,
       );
     });
 
@@ -351,6 +386,93 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.clearThreadSelectionsForChat(selection.chatId);
     });
 
+    this.bot.command('jira', async (ctx) => {
+      if (!this.jira.enabled) {
+        await ctx.reply(
+          'Jira is not configured. Set JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN.',
+        );
+        return;
+      }
+      const query = parseJiraQuery(ctx.message.text.replace(/^\/jira(?:@\w+)?\s*/i, ''));
+      await this.jiraRequest(ctx, () =>
+        query.kind === 'issue'
+          ? this.showJiraIssue(ctx, query.key)
+          : this.showJiraPage(ctx, query.jql),
+      );
+    });
+
+    this.bot.action(/^jira:(issue|more|work|cancel):([a-f0-9]+)$/, async (ctx) => {
+      const [, action, token] = ctx.match;
+      const pending = await this.ownedJiraSelection(ctx, token);
+      if (!pending) return;
+      await ctx.answerCbQuery().catch(() => undefined);
+      if (action === 'issue' && pending.kind === 'issue') {
+        await this.jiraRequest(ctx, () => this.showJiraIssue(ctx, pending.issueKey));
+      } else if (action === 'more' && pending.kind === 'page') {
+        this.pendingJira.delete(token);
+        await this.jiraRequest(ctx, () =>
+          this.showJiraPage(ctx, pending.jql, pending.nextPageToken),
+        );
+      } else if (action === 'work' && pending.kind === 'issue') {
+        await this.showWorkspacePicker(ctx, pending.issueKey);
+      } else if (action === 'cancel' && pending.kind === 'workspace') {
+        this.pendingJira.delete(token);
+        await ctx.editMessageText(`Cancelled work on ${pending.issueKey}.`).catch(() => undefined);
+      }
+    });
+
+    this.bot.action(/^jira:repo:([a-f0-9]+):(\d+)$/, async (ctx) => {
+      const token = ctx.match[1];
+      const pending = await this.ownedJiraSelection(ctx, token);
+      if (pending?.kind !== 'workspace') return;
+      // Buttons carry an index because repository keys could overflow callback_data.
+      const key = [...this.config.repositories.keys()][Number(ctx.match[2])];
+      if (!key) {
+        await ctx.answerCbQuery('Unknown repository.').catch(() => undefined);
+        return;
+      }
+      pending.repositoryKeys = pending.repositoryKeys.includes(key)
+        ? pending.repositoryKeys.filter((selected) => selected !== key)
+        : [...pending.repositoryKeys, key];
+      await ctx.answerCbQuery().catch(() => undefined);
+      await ctx
+        .editMessageText(this.workspaceText(pending), {
+          reply_markup: this.workspaceMarkup(token, pending.repositoryKeys),
+        })
+        .catch(() => undefined);
+    });
+
+    this.bot.action(/^jira:start:([a-f0-9]+):(implement|plan)$/, async (ctx) => {
+      const token = ctx.match[1];
+      const mode = ctx.match[2] as JiraWorkMode;
+      const pending = await this.ownedJiraSelection(ctx, token);
+      if (pending?.kind !== 'workspace' || !ctx.chat) return;
+      if (pending.repositoryKeys.length === 0) {
+        await ctx.answerCbQuery('Select at least one repository.', { show_alert: true })
+          .catch(() => undefined);
+        return;
+      }
+      if (!this.tasks.selectWorkspace(ctx.chat.id, pending.repositoryKeys)) {
+        await ctx.answerCbQuery('Cannot change repositories while a task is running.', {
+          show_alert: true,
+        }).catch(() => undefined);
+        return;
+      }
+      this.pendingJira.delete(token);
+      await ctx.answerCbQuery('Starting…').catch(() => undefined);
+      await ctx
+        .editMessageText(
+          `${mode === 'plan' ? 'Planning' : 'Working on'} ${pending.issueKey} in ${this.workspaceLabel(pending.repositoryKeys)}. Follow-up messages continue in this workspace.`,
+        )
+        .catch(() => undefined);
+      // Detached like text tasks so polling stays free for approval callbacks.
+      void this.startJiraTask(ctx, pending.issueKey, mode).catch((error: unknown) => {
+        this.logger.error(
+          `Detached Jira task failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      });
+    });
+
     this.bot.on('text', (ctx) => {
       if (ctx.message.text.startsWith('/')) return;
       // Do not await a long-running Codex turn inside Telegraf's update
@@ -438,6 +560,141 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           `Could not remove temporary upload ${filename}: ${error instanceof Error ? error.message : 'unknown error'}`,
         );
       });
+    }
+  }
+
+  private async showJiraPage(ctx: Context, jql: string, pageToken?: string): Promise<void> {
+    if (!ctx.chat || !ctx.from) return;
+    const page = await this.jira.search(jql, pageToken);
+    if (page.issues.length === 0) {
+      await ctx.reply(pageToken ? 'No more tickets.' : `No Jira tickets match:\n${jql}`);
+      return;
+    }
+    const owner = { chatId: ctx.chat.id, userId: ctx.from.id };
+    const rows = page.issues.map((issue) => [
+      {
+        text: this.limit(`${issue.key} · ${issue.status} · ${issue.summary}`, 60),
+        callback_data: `jira:issue:${this.pendingJira.add({ kind: 'issue', ...owner, issueKey: issue.key })}`,
+      },
+    ]);
+    if (page.nextPageToken) {
+      const token = this.pendingJira.add({
+        kind: 'page',
+        ...owner,
+        jql,
+        nextPageToken: page.nextPageToken,
+      });
+      rows.push([{ text: 'Next page ▸', callback_data: `jira:more:${token}` }]);
+    }
+    await ctx.reply(
+      `${pageToken ? 'More tickets' : 'Jira tickets'} for:\n${jql}\n\nSelect one to view it.`,
+      { reply_markup: { inline_keyboard: rows } },
+    );
+  }
+
+  private async showJiraIssue(ctx: Context, key: string): Promise<void> {
+    if (!ctx.chat || !ctx.from) return;
+    const issue = await this.jira.getIssue(key);
+    const token = this.pendingJira.add({
+      kind: 'issue',
+      chatId: ctx.chat.id,
+      userId: ctx.from.id,
+      issueKey: issue.key,
+    });
+    await ctx.reply(this.jira.describe(issue), {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '▶ Work on this', callback_data: `jira:work:${token}` },
+          { text: 'Open in Jira', url: issue.url },
+        ]],
+      },
+    });
+  }
+
+  private async showWorkspacePicker(ctx: Context, issueKey: string): Promise<void> {
+    if (!ctx.chat || !ctx.from) return;
+    const session = this.tasks.session(ctx.chat.id);
+    const pending: PendingJira = {
+      kind: 'workspace',
+      chatId: ctx.chat.id,
+      userId: ctx.from.id,
+      issueKey,
+      repositoryKeys: [session.repositoryKey, ...session.extraRepositoryKeys].filter(
+        (key) => this.config.repository(key),
+      ),
+    };
+    const token = this.pendingJira.add(pending);
+    await ctx.reply(this.workspaceText(pending), {
+      reply_markup: this.workspaceMarkup(token, pending.repositoryKeys),
+    });
+  }
+
+  private async startJiraTask(ctx: Context, issueKey: string, mode: JiraWorkMode): Promise<void> {
+    let prompt: string;
+    try {
+      // Fetch again so the agent sees the ticket as it is now.
+      const issue = await this.jira.getIssue(issueKey);
+      prompt = this.jira.prompt(issue, mode, this.config.maxMessageLength);
+    } catch (error) {
+      await ctx.reply(
+        `Could not load ${issueKey} from Jira: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+      return;
+    }
+    await this.handleTask(ctx, prompt);
+  }
+
+  private workspaceText(pending: Extract<PendingJira, { kind: 'workspace' }>): string {
+    return `Choose repositories for ${pending.issueKey}. Tap to add or remove; the first one selected (★) is the main repository and working directory.\n\nSelected: ${this.workspaceLabel(pending.repositoryKeys)}\n\nStarting begins a fresh ${this.agentName(this.tasks.session(pending.chatId).provider)} thread.`;
+  }
+
+  private workspaceMarkup(token: string, selected: string[]) {
+    const buttons = [...this.config.repositories.keys()].map((key, index) => {
+      const position = selected.indexOf(key);
+      const mark = position === 0 ? '★ ' : position > 0 ? '✓ ' : '';
+      return { text: this.limit(`${mark}${key}`, 40), callback_data: `jira:repo:${token}:${index}` };
+    });
+    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (let index = 0; index < buttons.length; index += 2) {
+      rows.push(buttons.slice(index, index + 2));
+    }
+    rows.push([
+      { text: '▶ Implement', callback_data: `jira:start:${token}:implement` },
+      { text: '📝 Plan only', callback_data: `jira:start:${token}:plan` },
+    ]);
+    rows.push([{ text: '✕ Cancel', callback_data: `jira:cancel:${token}` }]);
+    return { inline_keyboard: rows };
+  }
+
+  private workspaceLabel(repositoryKeys: string[]): string {
+    const [main, ...extras] = repositoryKeys;
+    if (!main) return 'none';
+    return extras.length ? `${main} (main) + ${extras.join(', ')}` : main;
+  }
+
+  private async ownedJiraSelection(ctx: Context, token: string): Promise<PendingJira | undefined> {
+    const pending = this.pendingJira.get(token);
+    if (!pending) {
+      await ctx.answerCbQuery('This Jira selection has expired. Run /jira again.')
+        .catch(() => undefined);
+      return undefined;
+    }
+    if (ctx.chat?.id !== pending.chatId || ctx.from?.id !== pending.userId) {
+      await ctx.answerCbQuery('Only the user who opened this list can use it.', {
+        show_alert: true,
+      }).catch(() => undefined);
+      return undefined;
+    }
+    return pending;
+  }
+
+  private async jiraRequest(ctx: Context, action: () => Promise<void>): Promise<void> {
+    try {
+      await action();
+    } catch (error) {
+      await ctx.reply(
+        `Jira request failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
     }
   }
 

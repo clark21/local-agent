@@ -82,10 +82,12 @@ export class CodexService {
     signal: AbortSignal,
     onProgress: ProgressHandler,
     onApproval: ApprovalHandler,
+    additionalRepositories: RepositoryConfig[] = [],
   ): Promise<CodexRunResult> {
     const client = new AppServerClient(
       this.config.codexPath,
       repository,
+      additionalRepositories,
       this.config.codexModel,
       this.config.codexNetworkAccess,
       this.config.codexAllowSecretFileAccess,
@@ -113,6 +115,7 @@ export class CodexService {
     const client = new AppServerClient(
       this.config.codexPath,
       repository,
+      [],
       this.config.codexModel,
       this.config.codexNetworkAccess,
       this.config.codexAllowSecretFileAccess,
@@ -145,6 +148,7 @@ class AppServerClient {
   constructor(
     codexPath: string,
     private readonly repository: RepositoryConfig,
+    private readonly additionalRepositories: RepositoryConfig[],
     private readonly model: string | undefined,
     private readonly networkAccess: boolean,
     private readonly allowSecretFileAccess: boolean,
@@ -438,7 +442,10 @@ class AppServerClient {
     if (type === 'workspaceWrite') {
       return {
         type,
-        writableRoots: [this.repository.path],
+        writableRoots: [
+          this.repository.path,
+          ...this.additionalRepositories.map((repository) => repository.path),
+        ],
         networkAccess: this.networkAccess,
       };
     }
