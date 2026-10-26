@@ -1,13 +1,34 @@
 import { resolve } from 'node:path';
-import { ApprovalRequest } from '../codex/codex.service';
+import { ApprovalRequest, secretFileInstructions } from '../codex/codex.service';
 import { ClaudeService } from './claude.service';
 
 describe('ClaudeService CLI integration', () => {
-  const service = new ClaudeService({
+  const serviceWith = (claudePermissionMode: string) => new ClaudeService({
     claudePath: resolve('test/fixtures/fake-claude-cli.sh'),
     claudeModel: undefined,
     codexAllowSecretFileAccess: false,
+    claudePermissionMode,
   } as never);
+  const service = serviceWith('manual');
+
+  it('tells the agent what CODEX_ALLOW_SECRET_FILE_ACCESS allows, overriding stricter instruction files', () => {
+    expect(secretFileInstructions(false)).toMatch(/^Security policy: do not read, print, summarize, copy, or expose \.env files/);
+    expect(secretFileInstructions(true)).toMatch(/may read \.env files/);
+    expect(secretFileInstructions(true)).toMatch(/takes precedence over instruction files/);
+    expect(secretFileInstructions(true)).toMatch(/Never reproduce secret values/);
+  });
+
+  it.each(['manual', 'acceptEdits', 'bypassPermissions'])(
+    'passes the configured permission mode %s to the CLI',
+    async (mode) => {
+      const result = await serviceWith(mode).run(
+        { key: 'test', path: '/tmp' }, 'run tests', 'report-mode', new AbortController().signal,
+        () => Promise.resolve(), () => Promise.resolve('accept'),
+      );
+      // The fake CLI rejects bypassPermissions without --allow-dangerously-skip-permissions.
+      expect(result.response).toBe(`mode:${mode}`);
+    },
+  );
 
   const run = (
     threadId: string | null,

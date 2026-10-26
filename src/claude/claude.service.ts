@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { AgentConfigService, RepositoryConfig } from '../config/agent-config.service';
+import { AgentConfigService, ClaudePermissionMode, RepositoryConfig } from '../config/agent-config.service';
 import {
   ApprovalDecision,
   ApprovalHandler,
@@ -44,6 +44,7 @@ export class ClaudeService {
       this.config.claudePath,
       this.config.claudeModel,
       this.config.codexAllowSecretFileAccess,
+      this.config.claudePermissionMode,
       repository,
       additionalRepositories,
       onProgress,
@@ -77,6 +78,7 @@ class ClaudeCliClient {
     private readonly claudePath: string,
     private readonly model: string | undefined,
     private readonly allowSecretFileAccess: boolean,
+    private readonly permissionMode: ClaudePermissionMode,
     private readonly repository: RepositoryConfig,
     private readonly additionalRepositories: RepositoryConfig[],
     private readonly onProgress: ProgressHandler,
@@ -96,8 +98,11 @@ class ClaudeCliClient {
       '--output-format',
       'stream-json',
       '--verbose',
+      // From CLAUDE_PERMISSION_MODE, or CODEX_APPROVAL_POLICY=never (AgentConfigService). Prompts that a mode
+      // still raises go to Telegram through the stdio permission tool below.
       '--permission-mode',
-      'manual',
+      this.permissionMode,
+      ...(this.permissionMode === 'bypassPermissions' ? ['--allow-dangerously-skip-permissions'] : []),
       '--permission-prompts',
       'host',
       // Without this the CLI never sends can_use_tool requests over stdio and

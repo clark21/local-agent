@@ -122,6 +122,19 @@ describe('AgentConfigService', () => {
     expect(service.codexApprovalPolicy).toBe('untrusted');
   });
 
+  it('sets the Claude permission mode from CLAUDE_PERMISSION_MODE, or follows CODEX_APPROVAL_POLICY, failing closed', () => {
+    const mode = (values: Record<string, string>) => new AgentConfigService(config({
+      TELEGRAM_BOT_TOKEN: 'token', TELEGRAM_ALLOWED_USER_IDS: '123', REPOSITORIES_JSON: '{"app":"/tmp/app"}', ...values,
+    })).claudePermissionMode;
+
+    expect(mode({})).toBe('manual');
+    expect(mode({ CODEX_APPROVAL_POLICY: 'never' })).toBe('bypassPermissions');
+    expect(mode({ CODEX_APPROVAL_POLICY: 'on-request' })).toBe('manual');
+    expect(mode({ CODEX_APPROVAL_POLICY: 'never', CLAUDE_PERMISSION_MODE: 'acceptEdits' })).toBe('acceptEdits');
+    expect(mode({ CLAUDE_PERMISSION_MODE: ' bypassPermissions ' })).toBe('bypassPermissions');
+    expect(mode({ CODEX_APPROVAL_POLICY: 'never', CLAUDE_PERMISSION_MODE: 'yolo' })).toBe('manual');
+  });
+
   it('rejects relative repository paths', () => {
     expect(
       () =>

@@ -511,7 +511,8 @@ class AppServerClient {
 
 export function secretFileInstructions(allowSecretFileAccess: boolean): string {
   if (allowSecretFileAccess) {
-    return 'Secret-file access is enabled by the application owner. You may read secret files inside the active sandbox when required for the user\'s task. Never reproduce secret values in chat, progress updates, command output, logs, or committed files.';
+    // Instruction files (CLAUDE.md, AGENTS.md) defer to this line, so CODEX_ALLOW_SECRET_FILE_ACCESS decides.
+    return 'Secret-file access is enabled by the application owner (CODEX_ALLOW_SECRET_FILE_ACCESS=true). You may read .env files and other secret files inside the active sandbox when required for the user\'s task; this takes precedence over instruction files that forbid reading them. Never reproduce secret values in chat, progress updates, command output, logs, the knowledge base, or committed files.';
   }
   return 'Security policy: do not read, print, summarize, copy, or expose .env files, credentials, private keys, tokens, or secret stores. Ask the user to perform secret-dependent operations manually.';
 }

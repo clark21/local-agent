@@ -5,12 +5,25 @@ set -euo pipefail
 # integration regressions. --resume <id> selects failure scenarios.
 args=" $* "
 resume=""
+mode=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --resume) resume="$2"; shift 2 ;;
+    --permission-mode) mode="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+
+case "$mode" in
+  manual|acceptEdits|auto|dontAsk|plan) ;;
+  bypassPermissions)
+    if [[ "$args" != *" --allow-dangerously-skip-permissions "* ]]; then
+      echo 'Error: bypassPermissions needs --allow-dangerously-skip-permissions' >&2
+      exit 1
+    fi
+    ;;
+  *) echo "Error: invalid --permission-mode '$mode'" >&2; exit 1 ;;
+esac
 
 if [[ "$args" != *" --verbose "* ]]; then
   echo 'Error: When using --print, --output-format=stream-json requires --verbose' >&2
@@ -55,6 +68,12 @@ case "$resume" in
     printf '%s\n' '{"type":"control_request","request_id":"permission-1","request":{"subtype":"can_use_tool","tool_name":"WebFetch","input":{"url":"https://example.com","prompt":"summarize"}}}'
     read -r _response
     printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-session","result":"fetched"}'
+    cat >/dev/null
+    exit 0
+    ;;
+  report-mode)
+    read -r _prompt
+    printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"claude-session\",\"result\":\"mode:$mode\"}"
     cat >/dev/null
     exit 0
     ;;

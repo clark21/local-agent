@@ -209,6 +209,7 @@ CODEX_SANDBOX_MODE=workspace-write
 CODEX_APPROVAL_POLICY=untrusted
 CLAUDE_PATH=claude
 CLAUDE_MODEL=
+CLAUDE_PERMISSION_MODE=
 TASK_TIMEOUT_MS=1800000
 APPROVAL_TIMEOUT_MS=300000
 MAX_MESSAGE_LENGTH=12000
@@ -236,6 +237,7 @@ JIRA_API_TOKEN=
 | `CODEX_APPROVAL_POLICY` | No | Codex approval policy: `untrusted`, `on-request`, or `never`; missing or invalid values fall back to `untrusted`. |
 | `CLAUDE_PATH` | No | Claude Code CLI executable; defaults to `claude`. |
 | `CLAUDE_MODEL` | No | Claude model or alias. Empty uses the local Claude Code default. |
+| `CLAUDE_PERMISSION_MODE` | No | Claude Code `--permission-mode`: `manual` (every prompt goes to Telegram), `acceptEdits`, `auto`, `dontAsk`, `plan`, or `bypassPermissions` (no prompts; also passes `--allow-dangerously-skip-permissions`). Empty follows `CODEX_APPROVAL_POLICY`: `never` means `bypassPermissions`, anything else `manual`. Invalid values fall back to `manual`. |
 | `TASK_TIMEOUT_MS` | No | Maximum turn duration; defaults to 30 minutes. |
 | `APPROVAL_TIMEOUT_MS` | No | Approval lifetime; defaults to 5 minutes, then rejects. |
 | `MAX_MESSAGE_LENGTH` | No | Maximum accepted prompt length; defaults to 12,000 characters. |
@@ -260,6 +262,11 @@ Restart the service after changing `.env`; configuration is loaded at startup.
 This setting grants permission only within the active filesystem sandbox. It
 does not expand the selected repository or other sandbox boundaries, and it
 does not permit Codex to reproduce secret values in replies, logs, or files.
+
+The instruction both agents receive states that this setting takes precedence
+over instruction files (`CLAUDE.md`, `AGENTS.md`) that forbid reading `.env`
+files. Keep such files conditional too ("unless the session says secret-file
+access is enabled"), or the stricter rule can still win.
 Use `false` when secret-file access is not needed.
 
 JSON must remain valid and normally fits on one line. For example:

@@ -13,6 +13,9 @@ export type CodexSandboxMode =
   | 'danger-full-access';
 export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never';
 export type AgentProvider = 'codex' | 'claude';
+// Claude Code's --permission-mode choices. 'manual' sends every permission prompt to Telegram.
+export const CLAUDE_PERMISSION_MODES = ['manual', 'acceptEdits', 'auto', 'dontAsk', 'plan', 'bypassPermissions'] as const;
+export type ClaudePermissionMode = (typeof CLAUDE_PERMISSION_MODES)[number];
 
 export interface JiraConfig {
   baseUrl: string;
@@ -36,6 +39,7 @@ export class AgentConfigService {
   readonly defaultAgent: AgentProvider;
   readonly claudePath: string;
   readonly claudeModel?: string;
+  readonly claudePermissionMode: ClaudePermissionMode;
   readonly taskTimeoutMs: number;
   readonly approvalTimeoutMs: number;
   readonly maxMessageLength: number;
@@ -88,6 +92,12 @@ export class AgentConfigService {
     );
     this.claudePath = config.get<string>('CLAUDE_PATH')?.trim() || 'claude';
     this.claudeModel = config.get<string>('CLAUDE_MODEL')?.trim() || undefined;
+    // Unset: follow CODEX_APPROVAL_POLICY, so "never" means no prompts for either agent. A value that isn't a
+    // Claude mode fails closed to 'manual' (every prompt goes to Telegram).
+    const claudePermissionMode = config.get<string>('CLAUDE_PERMISSION_MODE')?.trim();
+    this.claudePermissionMode = claudePermissionMode
+      ? this.oneOf(claudePermissionMode, CLAUDE_PERMISSION_MODES, 'manual')
+      : this.codexApprovalPolicy === 'never' ? 'bypassPermissions' : 'manual';
     this.taskTimeoutMs = this.positiveInteger(
       config.get<string>('TASK_TIMEOUT_MS') ?? '1800000',
       'TASK_TIMEOUT_MS',
